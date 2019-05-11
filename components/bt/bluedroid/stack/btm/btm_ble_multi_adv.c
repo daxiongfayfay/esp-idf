@@ -18,17 +18,17 @@
 
 #include <string.h>
 
-#include "bt_target.h"
-#include "controller.h"
+#include "common/bt_target.h"
+#include "device/controller.h"
 
 #if (BLE_INCLUDED == TRUE)
-#include "bt_types.h"
-#include "hcimsgs.h"
-#include "btu.h"
+#include "stack/bt_types.h"
+#include "stack/hcimsgs.h"
+#include "stack/btu.h"
 #include "btm_int.h"
 //#include "bt_utils.h"
-#include "hcidefs.h"
-#include "btm_ble_api.h"
+#include "stack/hcidefs.h"
+#include "stack/btm_ble_api.h"
 
 /************************************************************************************
 **  Constants & Macros
@@ -222,10 +222,10 @@ tBTM_STATUS btm_ble_enable_multi_adv (BOOLEAN enable, UINT8 inst_id, UINT8 cb_ev
 ** Returns          tx power in dBm
 **
 *******************************************************************************/
-int btm_ble_tx_power[BTM_BLE_ADV_TX_POWER_MAX + 1] = BTM_BLE_ADV_TX_POWER;
+static const int btm_ble_tx_power[BTM_BLE_ADV_TX_POWER_MAX + 1] = BTM_BLE_ADV_TX_POWER;
 char btm_ble_map_adv_tx_power(int tx_power_index)
 {
-    if (0 <= tx_power_index && tx_power_index < BTM_BLE_ADV_TX_POWER_MAX) {
+    if (0 <= tx_power_index && tx_power_index <= BTM_BLE_ADV_TX_POWER_MAX) {
         return (char)btm_ble_tx_power[tx_power_index];
     }
     return 0;
@@ -771,17 +771,17 @@ void btm_ble_multi_adv_init()
     btm_multi_adv_idx_q.rear = -1;
 
     if (btm_cb.cmn_ble_vsc_cb.adv_inst_max > 0) {
-        btm_multi_adv_cb.p_adv_inst = GKI_getbuf( sizeof(tBTM_BLE_MULTI_ADV_INST) *
+        btm_multi_adv_cb.p_adv_inst = osi_malloc( sizeof(tBTM_BLE_MULTI_ADV_INST) *
                                       (btm_cb.cmn_ble_vsc_cb.adv_inst_max));
         memset(btm_multi_adv_cb.p_adv_inst, 0, sizeof(tBTM_BLE_MULTI_ADV_INST) *
                (btm_cb.cmn_ble_vsc_cb.adv_inst_max));
 
-        btm_multi_adv_cb.op_q.p_sub_code = GKI_getbuf( sizeof(UINT8) *
+        btm_multi_adv_cb.op_q.p_sub_code = osi_malloc( sizeof(UINT8) *
                                            (btm_cb.cmn_ble_vsc_cb.adv_inst_max));
         memset(btm_multi_adv_cb.op_q.p_sub_code, 0,
                sizeof(UINT8) * (btm_cb.cmn_ble_vsc_cb.adv_inst_max));
 
-        btm_multi_adv_cb.op_q.p_inst_id = GKI_getbuf( sizeof(UINT8) *
+        btm_multi_adv_cb.op_q.p_inst_id = osi_malloc( sizeof(UINT8) *
                                           (btm_cb.cmn_ble_vsc_cb.adv_inst_max));
         memset(btm_multi_adv_cb.op_q.p_inst_id, 0,
                sizeof(UINT8) * (btm_cb.cmn_ble_vsc_cb.adv_inst_max));
@@ -809,15 +809,18 @@ void btm_ble_multi_adv_init()
 void btm_ble_multi_adv_cleanup(void)
 {
     if (btm_multi_adv_cb.p_adv_inst) {
-        GKI_freebuf(btm_multi_adv_cb.p_adv_inst);
+        osi_free(btm_multi_adv_cb.p_adv_inst);
+        btm_multi_adv_cb.p_adv_inst = NULL;
     }
 
     if (btm_multi_adv_cb.op_q.p_sub_code) {
-        GKI_freebuf(btm_multi_adv_cb.op_q.p_sub_code);
+        osi_free(btm_multi_adv_cb.op_q.p_sub_code);
+        btm_multi_adv_cb.op_q.p_sub_code = NULL;
     }
 
     if (btm_multi_adv_cb.op_q.p_inst_id) {
-        GKI_freebuf(btm_multi_adv_cb.op_q.p_inst_id);
+        osi_free(btm_multi_adv_cb.op_q.p_inst_id);
+        btm_multi_adv_cb.op_q.p_inst_id = NULL;
     }
 
 }

@@ -16,12 +16,12 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
 #include <string.h>
 #include "smp_int.h"
 
-#if BLE_INCLUDED == TRUE
+#if (BLE_INCLUDED == TRUE && SMP_INCLUDED == TRUE)
 
 const char *const smp_br_state_name [SMP_BR_STATE_MAX + 1] = {
     "SMP_BR_STATE_IDLE",

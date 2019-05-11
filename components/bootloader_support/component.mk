@@ -1,18 +1,28 @@
 COMPONENT_ADD_INCLUDEDIRS := include
-COMPONENT_PRIV_INCLUDEDIRS := include_priv
 
 ifdef IS_BOOTLOADER_BUILD
-# share "private" headers with the bootloader component
-# eventual goal: all functionality that needs this lives in bootloader_support
-COMPONENT_ADD_INCLUDEDIRS += include_priv
+# share "include_bootloader" headers with bootloader main component
+COMPONENT_ADD_INCLUDEDIRS += include_bootloader
+else
+COMPONENT_PRIV_INCLUDEDIRS := include_bootloader
 endif
 
 COMPONENT_SRCDIRS := src
 
+ifndef IS_BOOTLOADER_BUILD
+COMPONENT_SRCDIRS += src/idf  # idf sub-directory contains platform agnostic IDF versions
+else
+COMPONENT_SRCDIRS += src/$(IDF_TARGET)  # one sub-dir per chip
+endif
+
+ifndef IS_BOOTLOADER_BUILD
+COMPONENT_OBJEXCLUDE := src/bootloader_init.o
+endif
+
 #
 # Secure boot signing key support
 #
-ifdef CONFIG_SECURE_BOOT_ENABLED
+ifdef CONFIG_SECURE_SIGNED_APPS
 
 # this path is created relative to the component build directory
 SECURE_BOOT_VERIFICATION_KEY := $(abspath signature_verification_key.bin)

@@ -27,7 +27,7 @@
 namespace nvs
 {
 
-class Storage
+class Storage : public intrusive_list_node<Storage>
 {
     enum class StorageState : uint32_t {
         INVALID,
@@ -42,8 +42,26 @@ class Storage
 
     typedef intrusive_list<NamespaceEntry> TNamespaces;
 
+    struct UsedPageNode: public intrusive_list_node<UsedPageNode> {
+        public: Page* mPage;
+    };
+
+    typedef intrusive_list<UsedPageNode> TUsedPageList;
+
+    struct BlobIndexNode: public intrusive_list_node<BlobIndexNode> {
+        public:
+            char key[Item::MAX_KEY_LENGTH + 1];
+            uint8_t nsIndex;
+            uint8_t chunkCount; 
+            VerOffset chunkStart; 
+    };
+
+    typedef intrusive_list<BlobIndexNode> TBlobIndexList;
+
 public:
     ~Storage();
+
+    Storage(const char *pName = NVS_DEFAULT_PART_NAME) : mPartitionName(pName) { };
 
     esp_err_t init(uint32_t baseSector, uint32_t sectorCount);
 
@@ -78,10 +96,28 @@ public:
     
     esp_err_t eraseNamespace(uint8_t nsIndex);
 
+    const char *getPartName() const
+    {
+        return mPartitionName;
+    }
+    uint32_t getBaseSector()
+    {
+        return mPageManager.getBaseSector();
+    }
+
+    esp_err_t writeMultiPageBlob(uint8_t nsIndex, const char* key, const void* data, size_t dataSize, VerOffset chunkStart);
+
+    esp_err_t readMultiPageBlob(uint8_t nsIndex, const char* key, void* data, size_t dataSize);
+
+    esp_err_t eraseMultiPageBlob(uint8_t nsIndex, const char* key, VerOffset chunkStart = VerOffset::VER_ANY);
+
     void debugDump();
     
     void debugCheck();
 
+    esp_err_t fillStats(nvs_stats_t& nvsStats);
+
+    esp_err_t calcEntriesInNamespace(uint8_t nsIndex, size_t& usedEntries);
 
 protected:
 
@@ -92,9 +128,15 @@ protected:
 
     void clearNamespaces();
 
-    esp_err_t findItem(uint8_t nsIndex, ItemType datatype, const char* key, Page* &page, Item& item);
+    void populateBlobIndices(TBlobIndexList&);
+
+    void eraseOrphanDataBlobs(TBlobIndexList&);
+
+
+    esp_err_t findItem(uint8_t nsIndex, ItemType datatype, const char* key, Page* &page, Item& item, uint8_t chunkIdx = Page::CHUNK_ANY, VerOffset chunkStart = VerOffset::VER_ANY);
 
 protected:
+    const char *mPartitionName;
     size_t mPageCount;
     PageManager mPageManager;
     TNamespaces mNamespaces;

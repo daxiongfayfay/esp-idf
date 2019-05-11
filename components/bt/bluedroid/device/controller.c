@@ -16,18 +16,19 @@
  *
  ******************************************************************************/
 #include <stdbool.h>
-#include "bt_trace.h"
-#include "bdaddr.h"
-#include "bt_types.h"
-#include "controller.h"
-#include "event_mask.h"
-#include "hcimsgs.h"
-#include "hci_layer.h"
-#include "hci_packet_factory.h"
-#include "hci_packet_parser.h"
-#include "btm_ble_api.h"
-#include "version.h"
-#include "future.h"
+#include "common/bt_target.h"
+#include "common/bt_trace.h"
+#include "device/bdaddr.h"
+#include "stack/bt_types.h"
+#include "device/controller.h"
+#include "device/event_mask.h"
+#include "stack/hcimsgs.h"
+#include "hci/hci_layer.h"
+#include "hci/hci_packet_factory.h"
+#include "hci/hci_packet_parser.h"
+#include "stack/btm_ble_api.h"
+#include "device/version.h"
+#include "osi/future.h"
 
 const bt_event_mask_t BLE_EVENT_MASK = { "\x00\x00\x00\x00\x00\x00\x06\x7f" };
 
@@ -61,11 +62,15 @@ static uint16_t acl_data_size_ble;
 static uint16_t acl_buffer_count_classic;
 static uint8_t acl_buffer_count_ble;
 
+static uint8_t sco_data_size;
+static uint16_t sco_buffer_count;
+
 static uint8_t ble_white_list_size;
 static uint8_t ble_resolving_list_max_size;
 static uint8_t ble_supported_states[BLE_SUPPORTED_STATES_SIZE];
 static bt_device_features_t features_ble;
 static uint16_t ble_suggested_default_data_length;
+static uint16_t ble_suggested_default_data_txtime;
 
 static bool readable;
 static bool ble_supported;
@@ -87,8 +92,19 @@ static void start_up(void)
     // Request the classic buffer size next
     response = AWAIT_COMMAND(packet_factory->make_read_buffer_size());
     packet_parser->parse_read_buffer_size_response(
-        response, &acl_data_size_classic, &acl_buffer_count_classic);
+        response, &acl_data_size_classic, &acl_buffer_count_classic,
+        &sco_data_size, &sco_buffer_count);
 
+#if (C2H_FLOW_CONTROL_INCLUDED == TRUE)
+    // Enable controller to host flow control
+    response = AWAIT_COMMAND(packet_factory->make_set_c2h_flow_control(HCI_HOST_FLOW_CTRL_ACL_ON));
+    packet_parser->parse_generic_command_complete(response);
+#endif ///C2H_FLOW_CONTROL_INCLUDED == TRUE
+#if (BLE_ADV_REPORT_FLOW_CONTROL == TRUE)
+    // Enable adv flow control
+    response = AWAIT_COMMAND(packet_factory->make_set_adv_report_flow_control(HCI_HOST_FLOW_CTRL_ADV_REPORT_ON, (uint16_t)BLE_ADV_REPORT_FLOW_CONTROL_NUM, (uint16_t)BLE_ADV_REPORT_DISCARD_THRSHOLD));
+    packet_parser->parse_generic_command_complete(response);
+#endif
     // Tell the controller about our buffer sizes and buffer counts next
     // TODO(zachoverflow): factor this out. eww l2cap contamination. And why just a hardcoded 10?
     response = AWAIT_COMMAND(
@@ -137,7 +153,11 @@ static void start_up(void)
     // it told us it supports. We need to do this first before we request the
     // next page, because the controller's response for page 1 may be
     // dependent on what we configure from page 0
+#if (BT_SSP_INCLUDED == TRUE)
     simple_pairing_supported = HCI_SIMPLE_PAIRING_SUPPORTED(features_classic[0].as_array);
+#else
+    simple_pairing_supported = false;
+#endif
     if (simple_pairing_supported) {
         response = AWAIT_COMMAND(packet_factory->make_write_simple_pairing_mode(HCI_SP_MODE_ENABLED));
         packet_parser->parse_generic_command_complete(response);
@@ -221,10 +241,15 @@ static void start_up(void)
         }
 
         if (HCI_LE_DATA_LEN_EXT_SUPPORTED(features_ble.as_array)) {
+            /* set default tx data length to MAX 251 */
+            response = AWAIT_COMMAND(packet_factory->make_ble_write_suggested_default_data_length(BTM_BLE_DATA_SIZE_MAX, BTM_BLE_DATA_TX_TIME_MAX));
+            packet_parser->parse_generic_command_complete(response);
+
             response = AWAIT_COMMAND(packet_factory->make_ble_read_suggested_default_data_length());
             packet_parser->parse_ble_read_suggested_default_data_length_response(
                 response,
-                &ble_suggested_default_data_length);
+                &ble_suggested_default_data_length,
+                &ble_suggested_default_data_txtime);
         }
 
         // Set the ble event mask next
@@ -233,11 +258,18 @@ static void start_up(void)
     }
 #endif
 
-    if (simple_pairing_supported) {
-        response = AWAIT_COMMAND(packet_factory->make_set_event_mask(&CLASSIC_EVENT_MASK));
-        packet_parser->parse_generic_command_complete(response);
-    }
 
+    response = AWAIT_COMMAND(packet_factory->make_set_event_mask(&CLASSIC_EVENT_MASK));
+    packet_parser->parse_generic_command_complete(response);
+
+
+#if (BTM_SCO_HCI_INCLUDED == TRUE)
+    response = AWAIT_COMMAND(packet_factory->make_write_sync_flow_control_enable(1));
+    packet_parser->parse_generic_command_complete(response);
+
+    response = AWAIT_COMMAND(packet_factory->make_write_default_erroneous_data_report(1));
+    packet_parser->parse_generic_command_complete(response);
+#endif
     readable = true;
     // return future_new_immediate(FUTURE_SUCCESS);
     return;
@@ -400,6 +432,13 @@ static uint16_t get_ble_suggested_default_data_length(void)
     return ble_suggested_default_data_length;
 }
 
+static uint16_t get_ble_suggested_default_data_txtime(void)
+{
+    assert(readable);
+    assert(ble_supported);
+    return ble_suggested_default_data_txtime;
+}
+
 static uint16_t get_acl_buffer_count_classic(void)
 {
     assert(readable);
@@ -433,6 +472,20 @@ static void set_ble_resolving_list_max_size(int resolving_list_max_size)
     assert(ble_supported);
     ble_resolving_list_max_size = resolving_list_max_size;
 }
+
+#if (BTM_SCO_HCI_INCLUDED == TRUE)
+static uint8_t get_sco_data_size(void)
+{
+    assert(readable);
+    return sco_data_size;
+}
+
+static uint8_t get_sco_buffer_count(void)
+{
+    assert(readable);
+    return sco_buffer_count;
+}
+#endif /* (BTM_SCO_HCI_INCLUDED == TRUE) */
 
 static const controller_t interface = {
     start_up,
@@ -468,6 +521,7 @@ static const controller_t interface = {
     get_acl_packet_size_classic,
     get_acl_packet_size_ble,
     get_ble_suggested_default_data_length,
+    get_ble_suggested_default_data_txtime,
 
     get_acl_buffer_count_classic,
     get_acl_buffer_count_ble,
@@ -475,7 +529,11 @@ static const controller_t interface = {
     get_ble_white_list_size,
 
     get_ble_resolving_list_max_size,
-    set_ble_resolving_list_max_size
+    set_ble_resolving_list_max_size,
+#if (BTM_SCO_HCI_INCLUDED == TRUE)
+    get_sco_data_size,
+    get_sco_buffer_count,
+#endif /* (BTM_SCO_HCI_INCLUDED == TRUE) */
 };
 
 const controller_t *controller_get_interface()

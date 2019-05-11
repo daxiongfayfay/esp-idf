@@ -4,7 +4,7 @@
 
 #include <esp_types.h>
 #include <stdio.h>
-#include "rom/ets_sys.h"
+#include "esp32/rom/ets_sys.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,6 +15,7 @@
 #include "soc/uart_reg.h"
 #include "soc/dport_reg.h"
 #include "soc/io_mux_reg.h"
+#include "driver/gpio.h"
 
 
 void ets_isr_unmask(uint32_t unmask);
@@ -164,7 +165,7 @@ static void uartRxInit(xQueueHandle q)
 {
     uint32_t reg_val;
 
-    PIN_PULLUP_DIS(PERIPHS_IO_MUX_U0TXD_U);
+    gpio_pullup_dis(1);
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0RXD_U, FUNC_U0RXD_U0RXD);
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_U0TXD_U, FUNC_U0TXD_U0TXD);
 
@@ -178,8 +179,8 @@ static void uartRxInit(xQueueHandle q)
     SET_PERI_REG_MASK(UART_INT_ENA_REG(0), UART_RXFIFO_FULL_INT_ENA);
 
     printf("Enabling int %d\n", ETS_UART0_INUM);
-    REG_SET_FIELD(DPORT_PRO_UART_INTR_MAP_REG, DPORT_PRO_UART_INTR_MAP, ETS_UART0_INUM);
-    REG_SET_FIELD(DPORT_PRO_UART1_INTR_MAP_REG, DPORT_PRO_UART1_INTR_MAP, ETS_UART0_INUM);
+    DPORT_REG_SET_FIELD(DPORT_PRO_UART_INTR_MAP_REG, DPORT_PRO_UART_INTR_MAP, ETS_UART0_INUM);
+    DPORT_REG_SET_FIELD(DPORT_PRO_UART1_INTR_MAP_REG, DPORT_PRO_UART1_INTR_MAP, ETS_UART0_INUM);
 
     xt_set_interrupt_handler(ETS_UART0_INUM, uartIsrHdl, NULL);
     xt_ints_on(1 << ETS_UART0_INUM);
@@ -187,7 +188,7 @@ static void uartRxInit(xQueueHandle q)
 }
 
 // TODO: split this thing into separate orthogonal tests
-TEST_CASE("Bunch of FreeRTOS tests", "[freertos]")
+TEST_CASE("Bunch of FreeRTOS tests", "[freertos][ignore]")
 {
     char *tst;
     TaskHandle_t th[12];

@@ -24,18 +24,19 @@
  ******************************************************************************/
 #include <string.h>
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 //#include "bt_utils.h"
 #if SMP_INCLUDED == TRUE
 #include "smp_int.h"
-#include "smp_api.h"
-#include "l2cdefs.h"
+#include "stack/smp_api.h"
+#include "stack/l2cdefs.h"
 #include "l2c_int.h"
 #include "btm_int.h"
-#include "hcimsgs.h"
+#include "stack/hcimsgs.h"
 
-#include "btu.h"
+#include "stack/btu.h"
 #include "p_256_ecc_pp.h"
+#include "osi/allocator.h"
 
 /*******************************************************************************
 **
@@ -48,6 +49,9 @@
 *******************************************************************************/
 void SMP_Init(void)
 {
+#if SMP_DYNAMIC_MEMORY
+    smp_cb_ptr = (tSMP_CB *)osi_malloc(sizeof(tSMP_CB));
+#endif
     memset(&smp_cb, 0, sizeof(tSMP_CB));
 
 #if defined(SMP_INITIAL_TRACE_LEVEL)
@@ -60,6 +64,14 @@ void SMP_Init(void)
     smp_l2cap_if_init();
     /* initialization of P-256 parameters */
     p_256_init_curve(KEY_LENGTH_DWORDS_P256);
+}
+
+void SMP_Free(void)
+{
+    memset(&smp_cb, 0, sizeof(tSMP_CB));
+#if SMP_DYNAMIC_MEMORY
+    FREE_AND_RESET(smp_cb_ptr);
+#endif /* #if SMP_DYNAMIC_MEMORY */
 }
 
 
@@ -143,7 +155,7 @@ tSMP_STATUS SMP_Pair (BD_ADDR bd_addr)
 
         memcpy (p_cb->pairing_bda, bd_addr, BD_ADDR_LEN);
 
-        if (!L2CA_ConnectFixedChnl (L2CAP_SMP_CID, bd_addr)) {
+        if (!L2CA_ConnectFixedChnl (L2CAP_SMP_CID, bd_addr, BLE_ADDR_UNKNOWN_TYPE)) {
             SMP_TRACE_ERROR("%s: L2C connect fixed channel failed.\n", __FUNCTION__);
             smp_sm_event(p_cb, SMP_AUTH_CMPL_EVT, &status);
             return status;
@@ -186,7 +198,7 @@ tSMP_STATUS SMP_BR_PairWith (BD_ADDR bd_addr)
 
     memcpy (p_cb->pairing_bda, bd_addr, BD_ADDR_LEN);
 
-    if (!L2CA_ConnectFixedChnl (L2CAP_SMP_BR_CID, bd_addr)) {
+    if (!L2CA_ConnectFixedChnl (L2CAP_SMP_BR_CID, bd_addr, BLE_ADDR_UNKNOWN_TYPE)) {
         SMP_TRACE_ERROR("%s: L2C connect fixed channel failed.", __FUNCTION__);
         smp_br_state_machine_event(p_cb, SMP_BR_AUTH_CMPL_EVT, &status);
         return status;
@@ -314,6 +326,32 @@ void SMP_PasskeyReply (BD_ADDR bd_addr, UINT8 res, UINT32 passkey)
     }
 
     return;
+}
+
+/*******************************************************************************
+**
+** Function         SMP_SetStaticPasskey
+**
+** Description      This function is called to set static passkey
+**
+**
+** Parameters:      add          - set static passkey when add is TRUE
+**                                 clear static passkey when add is FALSE
+**                  passkey      - static passkey
+**
+**
+*******************************************************************************/
+void SMP_SetStaticPasskey (BOOLEAN add, UINT32 passkey)
+{
+    SMP_TRACE_DEBUG("static passkey %6d", passkey);
+    tSMP_CB *p_cb = & smp_cb;
+    if(add) {
+        p_cb->static_passkey = passkey;
+        p_cb->use_static_passkey = true;
+    } else {
+        p_cb->static_passkey = 0;
+        p_cb->use_static_passkey = false;
+    }
 }
 
 /*******************************************************************************
@@ -548,14 +586,18 @@ void SMP_KeypressNotification (BD_ADDR bd_addr, UINT8 value)
 BOOLEAN SMP_CreateLocalSecureConnectionsOobData (tBLE_BD_ADDR *addr_to_send_to)
 {
     tSMP_CB *p_cb = &smp_cb;
+#if (!CONFIG_BT_STACK_NO_LOG)
     UINT8   *bd_addr;
+#endif
 
     if (addr_to_send_to == NULL) {
         SMP_TRACE_ERROR ("%s addr_to_send_to is not provided", __FUNCTION__);
         return FALSE;
     }
 
+#if (!CONFIG_BT_STACK_NO_LOG)
     bd_addr = addr_to_send_to->bda;
+#endif
 
     SMP_TRACE_EVENT ("%s addr type: %u,  BDA: %08x%04x,  state: %u, br_state: %u",
                      __FUNCTION__, addr_to_send_to->type,

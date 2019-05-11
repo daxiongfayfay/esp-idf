@@ -21,9 +21,11 @@ Before sending us a Pull Request, please consider this list of points:
 
 * Is the code adequately commented for people to understand how it is structured?
 
-* Is there documentation or examples that go with code contributions? `There are additional suggestions for writing good examples in the examples README <https://github.com/espressif/esp-idf/tree/master/examples>`_.
+* Is there documentation or examples that go with code contributions? There are additional suggestions for writing good examples in :idf:`examples` readme.
 
 * Are comments and documentation written in clear English, with no spelling or grammar errors?
+
+* Example contributions are also welcome. Please check the :doc:`creating-examples` guide for these.
 
 * If the contribution contains multiple commits, are they grouped together into logical changes (one major change per pull request)? Are any commits with names like "fixed typo" `squashed into previous commits <http://eli.thegreenplace.net/2014/02/19/squashing-github-pull-requests-into-a-single-commit/>`_?
 
@@ -43,5 +45,15 @@ Legal Part
 
 Before a contribution can be accepted, you will need to sign our :doc:`contributor-agreement`. You will be prompted for this automatically as part of the Pull Request process.
 
+Related Documents
+-----------------
 
+.. toctree::
+    :maxdepth: 1
 
+    style-guide
+    documenting-code
+    add-ons-reference
+    creating-examples
+    ../api-reference/template
+    contributor-agreement

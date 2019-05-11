@@ -16,25 +16,24 @@
  *
  ******************************************************************************/
 
-#include "bt_trace.h"
+#include "common/bt_trace.h"
 
-#include "allocator.h"
-#include "future.h"
-#include "osi.h"
-#include "osi_arch.h"
+#include "osi/allocator.h"
+#include "osi/future.h"
+#include "osi/osi.h"
 
-static void future_free(future_t *future);
+void future_free(future_t *future);
 
 future_t *future_new(void)
 {
     future_t *ret = osi_calloc(sizeof(future_t));
     if (!ret) {
-        LOG_ERROR("%s unable to allocate memory for return value.", __func__);
+        OSI_TRACE_ERROR("%s unable to allocate memory for return value.", __func__);
         goto error;
     }
 
     if (osi_sem_new(&ret->semaphore, 1, 0) != 0) {
-        LOG_ERROR("%s unable to allocate memory for the semaphore.", __func__);
+        OSI_TRACE_ERROR("%s unable to allocate memory for the semaphore.", __func__);
         goto error;
     }
 
@@ -49,7 +48,7 @@ future_t *future_new_immediate(void *value)
 {
     future_t *ret = osi_calloc(sizeof(future_t));
     if (!ret) {
-        LOG_ERROR("%s unable to allocate memory for return value.", __func__);
+        OSI_TRACE_ERROR("%s unable to allocate memory for return value.", __func__);
         goto error;
     }
 
@@ -68,7 +67,7 @@ void future_ready(future_t *future, void *value)
 
     future->ready_can_be_called = false;
     future->result = value;
-    osi_sem_signal(&future->semaphore);
+    osi_sem_give(&future->semaphore);
 }
 
 void *future_await(future_t *future)
@@ -77,7 +76,7 @@ void *future_await(future_t *future)
 
     // If the future is immediate, it will not have a semaphore
     if (future->semaphore) {
-        osi_sem_wait(&future->semaphore, 0);
+        osi_sem_take(&future->semaphore, OSI_SEM_MAX_TIMEOUT);
     }
 
     void *result = future->result;
@@ -85,7 +84,7 @@ void *future_await(future_t *future)
     return result;
 }
 
-static void future_free(future_t *future)
+void future_free(future_t *future)
 {
     if (!future) {
         return;

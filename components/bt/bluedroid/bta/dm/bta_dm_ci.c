@@ -22,15 +22,15 @@
  *
  ******************************************************************************/
 
-#include "gki.h"
-#include "bta_sys.h"
-#include "bta_api.h"
+#include "bta/bta_sys.h"
+#include "bta/bta_api.h"
 #include "bta_dm_int.h"
 #include <string.h>
-#include "bta_dm_ci.h"
+#include "bta/bta_dm_ci.h"
+#include "osi/allocator.h"
 
 
-#if (BTM_OOB_INCLUDED == TRUE)
+#if (BTM_OOB_INCLUDED == TRUE && SMP_INCLUDED == TRUE)
 /*******************************************************************************
 **
 ** Function         bta_dm_ci_io_req
@@ -48,7 +48,7 @@ void bta_dm_ci_io_req(BD_ADDR bd_addr, tBTA_IO_CAP io_cap, tBTA_OOB_DATA oob_dat
 {
     tBTA_DM_CI_IO_REQ    *p_msg;
 
-    if ((p_msg = (tBTA_DM_CI_IO_REQ *) GKI_getbuf(sizeof(tBTA_DM_CI_IO_REQ))) != NULL) {
+    if ((p_msg = (tBTA_DM_CI_IO_REQ *) osi_malloc(sizeof(tBTA_DM_CI_IO_REQ))) != NULL) {
         p_msg->hdr.event = BTA_DM_CI_IO_REQ_EVT;
         bdcpy(p_msg->bd_addr, bd_addr);
         p_msg->io_cap   = io_cap;
@@ -73,7 +73,7 @@ void bta_dm_ci_rmt_oob(BOOLEAN accept, BD_ADDR bd_addr, BT_OCTET16 c, BT_OCTET16
 {
     tBTA_DM_CI_RMT_OOB    *p_msg;
 
-    if ((p_msg = (tBTA_DM_CI_RMT_OOB *) GKI_getbuf(sizeof(tBTA_DM_CI_RMT_OOB))) != NULL) {
+    if ((p_msg = (tBTA_DM_CI_RMT_OOB *) osi_malloc(sizeof(tBTA_DM_CI_RMT_OOB))) != NULL) {
         p_msg->hdr.event = BTA_DM_CI_RMT_OOB_EVT;
         bdcpy(p_msg->bd_addr, bd_addr);
         p_msg->accept    = accept;
@@ -83,32 +83,3 @@ void bta_dm_ci_rmt_oob(BOOLEAN accept, BD_ADDR bd_addr, BT_OCTET16 c, BT_OCTET16
     }
 }
 #endif /* BTM_OOB_INCLUDED */
-
-#if (BTM_SCO_HCI_INCLUDED == TRUE)
-/*******************************************************************************
-**
-** Function         bta_dm_sco_ci_data_ready
-**
-** Description      This function sends an event to indicating that the phone
-**                  has SCO data ready.
-**
-** Parameters       event: is obtained from bta_dm_sco_co_open() function, which
-**                          is the BTA event we want to send back to BTA module
-**                          when there is encoded data ready.
-**                  sco_handle: is the BTA sco handle which indicate a specific
-**                           SCO connection.
-** Returns          void
-**
-*******************************************************************************/
-void bta_dm_sco_ci_data_ready(UINT16 event, UINT16 sco_handle)
-{
-    BT_HDR  *p_buf;
-
-    if ((p_buf = (BT_HDR *) GKI_getbuf(sizeof(BT_HDR))) != NULL) {
-        p_buf->event = event;
-        p_buf->layer_specific = sco_handle;
-
-        bta_sys_sendmsg(p_buf);
-    }
-}
-#endif

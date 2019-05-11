@@ -23,18 +23,19 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
-//#include "btcore/include/counter.h"
-#include "gki.h"
-#include "hcidefs.h"
-#include "hcimsgs.h"
-#include "hcidefs.h"
-#include "btu.h"
+#include "common/bt_target.h"
+#include "osi/allocator.h"
+#include "stack/hcidefs.h"
+#include "stack/hcimsgs.h"
+#include "stack/hcidefs.h"
+#include "stack/btu.h"
 
 #include <stddef.h>
 #include <string.h>
 
 #include "btm_int.h"    /* Included for UIPC_* macro definitions */
+
+#define HCI_GET_CMD_BUF(paramlen)       ((BT_HDR *)osi_malloc(HCIC_PREAMBLE_SIZE + sizeof(BT_HDR) + paramlen))
 
 BOOLEAN btsnd_hcic_inquiry(const LAP inq_lap, UINT8 duration, UINT8 response_cnt)
 {
@@ -164,7 +165,9 @@ BOOLEAN btsnd_hcic_create_conn(BD_ADDR dest, UINT16 packet_types,
 #if !defined (BT_10A)
     UINT8_TO_STREAM  (pp, allow_switch);
 #endif
+#if (SMP_INCLUDED == TRUE && CLASSIC_BT_INCLUDED == TRUE)
     btm_acl_paging (p, dest);
+#endif  ///SMP_INCLUDED == TRUE && CLASSIC_BT_INCLUDED == TRUE
     return (TRUE);
 }
 
@@ -489,8 +492,9 @@ BOOLEAN btsnd_hcic_rmt_name_req (BD_ADDR bd_addr, UINT8 page_scan_rep_mode,
     UINT8_TO_STREAM  (pp, page_scan_rep_mode);
     UINT8_TO_STREAM  (pp, page_scan_mode);
     UINT16_TO_STREAM (pp, clock_offset);
-
+#if (SMP_INCLUDED == TRUE && CLASSIC_BT_INCLUDED == TRUE)
     btm_acl_paging (p, bd_addr);
+#endif  ///SMP_INCLUDED == TRUE && CLASSIC_BT_INCLUDED == TRUE
     return (TRUE);
 }
 
@@ -1850,7 +1854,7 @@ BOOLEAN btsnd_hcic_write_pagescan_type (UINT8 type)
 }
 
 /* Must have room to store BT_HDR + max VSC length + callback pointer */
-#if (HCI_CMD_POOL_BUF_SIZE < 268)
+#if (HCI_CMD_BUF_SIZE < 268)
 #error "HCI_CMD_POOL_BUF_SIZE must be larger than 268"
 #endif
 

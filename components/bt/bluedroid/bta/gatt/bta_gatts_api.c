@@ -22,15 +22,15 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
-#if defined(BTA_GATT_INCLUDED) && (BTA_GATT_INCLUDED == TRUE)
+#if defined(GATTS_INCLUDED) && (GATTS_INCLUDED == TRUE)
 
 #include <string.h>
-#include "gki.h"
-#include "bta_sys.h"
-#include "bta_gatt_api.h"
+#include "bta/bta_sys.h"
+#include "bta/bta_gatt_api.h"
 #include "bta_gatts_int.h"
+#include "osi/allocator.h"
 
 /*****************************************************************************
 **  Constants
@@ -61,7 +61,7 @@ void BTA_GATTS_Disable(void)
         return;
     }
 
-    if ((p_buf = (BT_HDR *) GKI_getbuf(sizeof(BT_HDR))) != NULL) {
+    if ((p_buf = (BT_HDR *) osi_malloc(sizeof(BT_HDR))) != NULL) {
         p_buf->event = BTA_GATTS_API_DISABLE_EVT;
         bta_sys_sendmsg(p_buf);
     }
@@ -91,7 +91,7 @@ void BTA_GATTS_AppRegister(tBT_UUID *p_app_uuid, tBTA_GATTS_CBACK *p_cback)
         bta_sys_register(BTA_ID_GATTS, &bta_gatts_reg);
     }
 
-    if ((p_buf = (tBTA_GATTS_API_REG *) GKI_getbuf(sizeof(tBTA_GATTS_API_REG))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_REG *) osi_malloc(sizeof(tBTA_GATTS_API_REG))) != NULL) {
         p_buf->hdr.event    = BTA_GATTS_API_REG_EVT;
 
         if (p_app_uuid != NULL) {
@@ -121,7 +121,7 @@ void BTA_GATTS_AppDeregister(tBTA_GATTS_IF server_if)
 {
     tBTA_GATTS_API_DEREG  *p_buf;
 
-    if ((p_buf = (tBTA_GATTS_API_DEREG *) GKI_getbuf(sizeof(tBTA_GATTS_API_DEREG))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_DEREG *) osi_malloc(sizeof(tBTA_GATTS_API_DEREG))) != NULL) {
         p_buf->hdr.event    = BTA_GATTS_API_DEREG_EVT;
         p_buf->server_if    = server_if;
 
@@ -154,7 +154,7 @@ void BTA_GATTS_CreateService(tBTA_GATTS_IF server_if, tBT_UUID *p_service_uuid, 
 {
     tBTA_GATTS_API_CREATE_SRVC  *p_buf;
 
-    if ((p_buf = (tBTA_GATTS_API_CREATE_SRVC *) GKI_getbuf(sizeof(tBTA_GATTS_API_CREATE_SRVC))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_CREATE_SRVC *) osi_malloc(sizeof(tBTA_GATTS_API_CREATE_SRVC))) != NULL) {
         p_buf->hdr.event = BTA_GATTS_API_CREATE_SRVC_EVT;
 
         p_buf->server_if = server_if;
@@ -187,7 +187,7 @@ void BTA_GATTS_AddIncludeService(UINT16 service_id, UINT16 included_service_id)
     tBTA_GATTS_API_ADD_INCL_SRVC  *p_buf;
 
     if ((p_buf =
-                (tBTA_GATTS_API_ADD_INCL_SRVC *) GKI_getbuf(sizeof(tBTA_GATTS_API_ADD_INCL_SRVC)))
+                (tBTA_GATTS_API_ADD_INCL_SRVC *) osi_malloc(sizeof(tBTA_GATTS_API_ADD_INCL_SRVC)))
             != NULL) {
         p_buf->hdr.event = BTA_GATTS_API_ADD_INCL_SRVC_EVT;
 
@@ -215,17 +215,34 @@ void BTA_GATTS_AddIncludeService(UINT16 service_id, UINT16 included_service_id)
 **
 *******************************************************************************/
 void BTA_GATTS_AddCharacteristic (UINT16 service_id,  tBT_UUID  *p_char_uuid,
-                                  tBTA_GATT_PERM perm, tBTA_GATT_CHAR_PROP property)
+                                  tBTA_GATT_PERM perm, tBTA_GATT_CHAR_PROP property, tGATT_ATTR_VAL *attr_val, 
+                                  tBTA_GATTS_ATTR_CONTROL *control)
 {
     tBTA_GATTS_API_ADD_CHAR  *p_buf;
-
-    if ((p_buf = (tBTA_GATTS_API_ADD_CHAR *) GKI_getbuf(sizeof(tBTA_GATTS_API_ADD_CHAR))) != NULL) {
+    UINT16 len = 0;
+    if(attr_val != NULL){
+        len = attr_val->attr_len;
+    }
+    if ((p_buf = (tBTA_GATTS_API_ADD_CHAR *) osi_malloc(sizeof(tBTA_GATTS_API_ADD_CHAR))) != NULL) {
         memset(p_buf, 0, sizeof(tBTA_GATTS_API_ADD_CHAR));
 
         p_buf->hdr.event = BTA_GATTS_API_ADD_CHAR_EVT;
         p_buf->hdr.layer_specific = service_id;
         p_buf->perm = perm;
         p_buf->property = property;
+        if(control !=NULL){
+            p_buf->control.auto_rsp = control->auto_rsp;
+        }
+        if(attr_val != NULL){
+            APPL_TRACE_DEBUG("!!!!!!attr_val->attr_len = %x\n",attr_val->attr_len);
+            APPL_TRACE_DEBUG("!!!!!!!attr_val->attr_max_len = %x\n",attr_val->attr_max_len);
+            p_buf->attr_val.attr_len = attr_val->attr_len;
+            p_buf->attr_val.attr_max_len = attr_val->attr_max_len;
+            p_buf->attr_val.attr_val = (uint8_t *)osi_malloc(len);
+            if(p_buf->attr_val.attr_val != NULL){
+                memcpy(p_buf->attr_val.attr_val, attr_val->attr_val, attr_val->attr_len);
+            }
+        }
 
         if (p_char_uuid) {
             memcpy(&p_buf->char_uuid, p_char_uuid, sizeof(tBT_UUID));
@@ -253,22 +270,43 @@ void BTA_GATTS_AddCharacteristic (UINT16 service_id,  tBT_UUID  *p_char_uuid,
 *******************************************************************************/
 void BTA_GATTS_AddCharDescriptor (UINT16 service_id,
                                   tBTA_GATT_PERM perm,
-                                  tBT_UUID   *p_descr_uuid)
+                                  tBT_UUID   *p_descr_uuid, tBTA_GATT_ATTR_VAL *attr_val, 
+                                  tBTA_GATTS_ATTR_CONTROL *control)
 {
     tBTA_GATTS_API_ADD_DESCR  *p_buf;
-    UINT16  len = sizeof(tBTA_GATTS_API_ADD_DESCR);
+    UINT16  value_len = 0;
 
-
-    if ((p_buf = (tBTA_GATTS_API_ADD_DESCR *) GKI_getbuf(len)) != NULL) {
-        memset(p_buf, 0, len);
+    if ((p_buf = (tBTA_GATTS_API_ADD_DESCR *) osi_malloc(sizeof(tBTA_GATTS_API_ADD_DESCR))) != NULL) {
+        memset(p_buf, 0, sizeof(tBTA_GATTS_API_ADD_DESCR));
 
         p_buf->hdr.event = BTA_GATTS_API_ADD_DESCR_EVT;
         p_buf->hdr.layer_specific = service_id;
         p_buf->perm = perm;
 
+        if(control != NULL){
+            p_buf->control.auto_rsp = control->auto_rsp;
+        }
+
         if (p_descr_uuid) {
             memcpy(&p_buf->descr_uuid, p_descr_uuid, sizeof(tBT_UUID));
         }
+
+        if(attr_val != NULL){
+            p_buf->attr_val.attr_len = attr_val->attr_len;
+            p_buf->attr_val.attr_max_len = attr_val->attr_max_len;
+            value_len =  attr_val->attr_len;
+            if (value_len != 0){
+                p_buf->attr_val.attr_val = (uint8_t*)osi_malloc(value_len);
+                if(p_buf->attr_val.attr_val != NULL){
+                    memcpy(p_buf->attr_val.attr_val, attr_val->attr_val, value_len);
+                }
+                else{
+                    APPL_TRACE_ERROR("Allocate fail for %s\n", __func__);
+
+                }
+            }
+        }
+
         bta_sys_sendmsg(p_buf);
     }
     return;
@@ -276,14 +314,14 @@ void BTA_GATTS_AddCharDescriptor (UINT16 service_id,
 }
 
 /*******************************************************************************
-**
-** Function         BTA_GATTS_DeleteService
-**
-** Description      This function is called to delete a service. When this is done,
-**                  a callback event BTA_GATTS_DELETE_EVT is report with the status.
-**
-** Parameters       service_id: service_id to be deleted.
-**
+ **
+ ** Function         BTA_GATTS_DeleteService
+ **
+ ** Description      This function is called to delete a service. When this is done,
+ **                  a callback event BTA_GATTS_DELETE_EVT is report with the status.
+ **
+ ** Parameters       service_id: service_id to be deleted.
+ **
 ** Returns          returns none.
 **
 *******************************************************************************/
@@ -291,7 +329,7 @@ void  BTA_GATTS_DeleteService(UINT16 service_id)
 {
     BT_HDR  *p_buf;
 
-    if ((p_buf = (BT_HDR *) GKI_getbuf(sizeof(BT_HDR))) != NULL) {
+    if ((p_buf = (BT_HDR *) osi_malloc(sizeof(BT_HDR))) != NULL) {
         p_buf->event = BTA_GATTS_API_DEL_SRVC_EVT;
 
         p_buf->layer_specific = service_id;
@@ -318,7 +356,7 @@ void  BTA_GATTS_StartService(UINT16 service_id, tBTA_GATT_TRANSPORT sup_transpor
 {
     tBTA_GATTS_API_START  *p_buf;
 
-    if ((p_buf = (tBTA_GATTS_API_START *) GKI_getbuf(sizeof(tBTA_GATTS_API_START))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_START *) osi_malloc(sizeof(tBTA_GATTS_API_START))) != NULL) {
         p_buf->hdr.event = BTA_GATTS_API_START_SRVC_EVT;
 
         p_buf->hdr.layer_specific = service_id;
@@ -344,7 +382,7 @@ void BTA_GATTS_StopService(UINT16 service_id)
 {
     BT_HDR  *p_buf;
 
-    if ((p_buf = (BT_HDR *) GKI_getbuf(sizeof(BT_HDR))) != NULL) {
+    if ((p_buf = (BT_HDR *) osi_malloc(sizeof(BT_HDR))) != NULL) {
         p_buf->event = BTA_GATTS_API_STOP_SRVC_EVT;
 
         p_buf->layer_specific = service_id;
@@ -375,7 +413,7 @@ void BTA_GATTS_HandleValueIndication (UINT16 conn_id, UINT16 attr_id, UINT16 dat
     tBTA_GATTS_API_INDICATION  *p_buf;
     UINT16  len = sizeof(tBTA_GATTS_API_INDICATION);
 
-    if ((p_buf = (tBTA_GATTS_API_INDICATION *) GKI_getbuf(len)) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_INDICATION *) osi_malloc(len)) != NULL) {
         memset(p_buf, 0, len);
 
         p_buf->hdr.event = BTA_GATTS_API_INDICATION_EVT;
@@ -413,7 +451,7 @@ void BTA_GATTS_SendRsp (UINT16 conn_id, UINT32 trans_id,
     tBTA_GATTS_API_RSP  *p_buf;
     UINT16  len = sizeof(tBTA_GATTS_API_RSP) + sizeof(tBTA_GATTS_RSP);
 
-    if ((p_buf = (tBTA_GATTS_API_RSP *) GKI_getbuf(len)) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_RSP *) osi_malloc(len)) != NULL) {
         memset(p_buf, 0, len);
 
         p_buf->hdr.event    = BTA_GATTS_API_RSP_EVT;
@@ -433,6 +471,31 @@ void BTA_GATTS_SendRsp (UINT16 conn_id, UINT32 trans_id,
 }
 
 
+void BTA_SetAttributeValue(UINT16 attr_handle, UINT16 length, UINT8 *value)
+{
+    tBTA_GATTS_API_SET_ATTR_VAL *p_buf;
+    UINT16  len = sizeof(tBTA_GATTS_API_SET_ATTR_VAL);
+    if((p_buf = (tBTA_GATTS_API_SET_ATTR_VAL *)osi_malloc(
+                    sizeof(tBTA_GATTS_API_SET_ATTR_VAL))) != NULL){
+        memset(p_buf, 0, len);
+        p_buf->hdr.event = BTA_GATTS_API_SET_ATTR_VAL_EVT;
+        p_buf->hdr.layer_specific = attr_handle;
+        p_buf->length = length;
+        if(value != NULL){
+            if((p_buf->value = (UINT8 *)osi_malloc(length)) != NULL){
+                memcpy(p_buf->value, value, length);
+            }
+        }
+
+        bta_sys_sendmsg(p_buf);
+    }
+
+}
+
+tBTA_GATT_STATUS BTA_GetAttributeValue(UINT16 attr_handle, UINT16 *length, UINT8 **value)
+{
+    return bta_gatts_get_attr_value(attr_handle, length, value);
+}
 
 /*******************************************************************************
 **
@@ -454,7 +517,7 @@ void BTA_GATTS_Open(tBTA_GATTS_IF server_if, BD_ADDR remote_bda, BOOLEAN is_dire
 {
     tBTA_GATTS_API_OPEN  *p_buf;
 
-    if ((p_buf = (tBTA_GATTS_API_OPEN *) GKI_getbuf(sizeof(tBTA_GATTS_API_OPEN))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_OPEN *) osi_malloc(sizeof(tBTA_GATTS_API_OPEN))) != NULL) {
         p_buf->hdr.event = BTA_GATTS_API_OPEN_EVT;
         p_buf->server_if = server_if;
         p_buf->is_direct = is_direct;
@@ -485,7 +548,7 @@ void BTA_GATTS_CancelOpen(tBTA_GATTS_IF server_if, BD_ADDR remote_bda, BOOLEAN i
 {
     tBTA_GATTS_API_CANCEL_OPEN  *p_buf;
 
-    if ((p_buf = (tBTA_GATTS_API_CANCEL_OPEN *) GKI_getbuf(sizeof(tBTA_GATTS_API_CANCEL_OPEN))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_CANCEL_OPEN *) osi_malloc(sizeof(tBTA_GATTS_API_CANCEL_OPEN))) != NULL) {
         p_buf->hdr.event = BTA_GATTS_API_CANCEL_OPEN_EVT;
         p_buf->server_if = server_if;
         p_buf->is_direct = is_direct;
@@ -510,7 +573,7 @@ void BTA_GATTS_Close(UINT16 conn_id)
 {
     BT_HDR  *p_buf;
 
-    if ((p_buf = (BT_HDR *) GKI_getbuf(sizeof(BT_HDR))) != NULL) {
+    if ((p_buf = (BT_HDR *) osi_malloc(sizeof(BT_HDR))) != NULL) {
         p_buf->event = BTA_GATTS_API_CLOSE_EVT;
         p_buf->layer_specific = conn_id;
         bta_sys_sendmsg(p_buf);
@@ -518,6 +581,23 @@ void BTA_GATTS_Close(UINT16 conn_id)
     return;
 
 }
+
+void BTA_GATTS_SendServiceChangeIndication(tBTA_GATTS_IF server_if, BD_ADDR remote_bda)
+{
+    tBTA_GATTS_API_SEND_SERVICE_CHANGE  *p_buf;
+
+    if ((p_buf = (tBTA_GATTS_API_SEND_SERVICE_CHANGE *) osi_malloc(sizeof(tBTA_GATTS_API_SEND_SERVICE_CHANGE))) != NULL) {
+        memset(p_buf, 0, sizeof(tBTA_GATTS_API_SEND_SERVICE_CHANGE));
+        p_buf->hdr.event = BTA_GATTS_API_SEND_SERVICE_CHANGE_EVT;
+        p_buf->server_if = server_if;
+        memcpy(p_buf->remote_bda, remote_bda, BD_ADDR_LEN);
+        
+        bta_sys_sendmsg(p_buf);
+    }
+    return;
+
+}
+
 /*******************************************************************************
 **
 ** Function         BTA_GATTS_Listen
@@ -537,7 +617,7 @@ void BTA_GATTS_Listen(tBTA_GATTS_IF server_if, BOOLEAN start, BD_ADDR_PTR target
 {
     tBTA_GATTS_API_LISTEN  *p_buf;
 
-    if ((p_buf = (tBTA_GATTS_API_LISTEN *) GKI_getbuf((UINT16)(sizeof(tBTA_GATTS_API_LISTEN) + BD_ADDR_LEN))) != NULL) {
+    if ((p_buf = (tBTA_GATTS_API_LISTEN *) osi_malloc((UINT16)(sizeof(tBTA_GATTS_API_LISTEN) + BD_ADDR_LEN))) != NULL) {
         p_buf->hdr.event = BTA_GATTS_API_LISTEN_EVT;
 
         p_buf->server_if    = server_if;

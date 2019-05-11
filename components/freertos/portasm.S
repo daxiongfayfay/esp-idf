@@ -24,12 +24,12 @@
 */
 
 #include "xtensa_rtos.h"
+#include "sdkconfig.h"
 
 #define TOPOFSTACK_OFFS                 0x00    /* StackType_t *pxTopOfStack */
 #define CP_TOPOFSTACK_OFFS              0x04    /* xMPU_SETTINGS.coproc_area */
 
 .extern pxCurrentTCB
-
 
 /*
 *******************************************************************************
@@ -42,6 +42,7 @@
     .align      16
     .global     port_IntStack
     .global     port_IntStackTop
+    .global     port_switch_flag
 port_IntStack:
     .space      configISR_STACK_SIZE*portNUM_PROCESSORS		/* This allocates stacks for each individual CPU. */
 port_IntStackTop:
@@ -132,8 +133,8 @@ _frxt_int_enter:
     l32i    a2,  a2, 0                  /* a2 = current TCB                */
     beqz    a2,  1f
     s32i    a1,  a2, TOPOFSTACK_OFFS    /* pxCurrentTCB->pxTopOfStack = SP */
-    movi    a1,  port_IntStackTop       /* a1 = top of intr stack          */
-	movi	a2,  configISR_STACK_SIZE
+    movi    a1,  port_IntStack+configISR_STACK_SIZE   /* a1 = top of intr stack for CPU 0  */
+    movi    a2,  configISR_STACK_SIZE   /* add configISR_STACK_SIZE * cpu_num to arrive at top of stack for cpu_num */
 	mull	a2,  a4, a2
 	add     a1,  a1, a2					/* for current proc */
 
@@ -269,6 +270,12 @@ _frxt_timer_int:
 
     ENTRY(16)
 
+    #ifdef CONFIG_PM_TRACE
+    movi a6, 1 /* = ESP_PM_TRACE_TICK */
+    getcoreid a7
+    call4 esp_pm_trace_enter
+    #endif // CONFIG_PM_TRACE
+
 .L_xt_timer_int_catchup:
 
     /* Update the timer comparator for the next tick. */
@@ -307,6 +314,12 @@ _frxt_timer_int:
     rsr     a4, CCOUNT                  /* a4 = cycle count                   */
     sub     a4, a4, a3                  /* diff = ccount - old comparator     */
     blt     a2, a4, .L_xt_timer_int_catchup  /* repeat while diff > divisor */
+
+#ifdef CONFIG_PM_TRACE
+    movi a6, 1 /* = ESP_PM_TRACE_TICK */
+    getcoreid a7
+    call4 esp_pm_trace_exit
+#endif // CONFIG_PM_TRACE
 
     RET(16)
 

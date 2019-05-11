@@ -21,6 +21,7 @@
 #include "freertos/semphr.h"
 #include "freertos/portmacro.h"
 #include "freertos/task.h"
+#include "freertos/portable.h"
 
 /* Notes on our newlib lock implementation:
  *
@@ -40,14 +41,16 @@
 
 static portMUX_TYPE lock_init_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
-/* Initialise the given lock by allocating a new mutex semaphore
+/* Initialize the given lock by allocating a new mutex semaphore
    as the _lock_t value.
+
+   Called by _lock_init*, also called by _lock_acquire* to lazily initialize locks that might have
+   been initialised (to zero only) before the RTOS scheduler started.
 */
 static void IRAM_ATTR lock_init_generic(_lock_t *lock, uint8_t mutex_type) {
     portENTER_CRITICAL(&lock_init_spinlock);
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
         /* nothing to do until the scheduler is running */
-        *lock = 0; /* ensure lock is zeroed out, in case it's an automatic variable */
         portEXIT_CRITICAL(&lock_init_spinlock);
         return;
     }
@@ -83,10 +86,12 @@ static void IRAM_ATTR lock_init_generic(_lock_t *lock, uint8_t mutex_type) {
 }
 
 void IRAM_ATTR _lock_init(_lock_t *lock) {
+    *lock = 0; // In case lock's memory is uninitialized
     lock_init_generic(lock, queueQUEUE_TYPE_MUTEX);
 }
 
 void IRAM_ATTR _lock_init_recursive(_lock_t *lock) {
+    *lock = 0; // In case lock's memory is uninitialized
     lock_init_generic(lock, queueQUEUE_TYPE_RECURSIVE_MUTEX);
 }
 
@@ -95,6 +100,10 @@ void IRAM_ATTR _lock_init_recursive(_lock_t *lock) {
    Note that FreeRTOS doesn't account for deleting mutexes while they
    are held, and neither do we... so take care not to delete newlib
    locks while they may be held by other tasks!
+
+   Also, deleting a lock in this way will cause it to be lazily
+   re-initialised if it is used again. Caller has to avoid doing
+   this!
 */
 void IRAM_ATTR _lock_close(_lock_t *lock) {
     portENTER_CRITICAL(&lock_init_spinlock);
@@ -108,6 +117,8 @@ void IRAM_ATTR _lock_close(_lock_t *lock) {
     }
     portEXIT_CRITICAL(&lock_init_spinlock);
 }
+
+void _lock_close_recursive(_lock_t *lock) __attribute__((alias("_lock_close")));
 
 /* Acquire the mutex semaphore for lock. wait up to delay ticks.
    mutex_type is queueQUEUE_TYPE_RECURSIVE_MUTEX or queueQUEUE_TYPE_MUTEX
@@ -126,7 +137,7 @@ static int IRAM_ATTR lock_acquire_generic(_lock_t *lock, uint32_t delay, uint8_t
     }
 
     BaseType_t success;
-    if (cpu_in_interrupt_context()) {
+    if (xPortInIsrContext()) {
         /* In ISR Context */
         if (mutex_type == queueQUEUE_TYPE_RECURSIVE_MUTEX) {
             abort(); /* recursive mutexes make no sense in ISR context */
@@ -180,7 +191,7 @@ static void IRAM_ATTR lock_release_generic(_lock_t *lock, uint8_t mutex_type) {
         return;
     }
 
-    if (cpu_in_interrupt_context()) {
+    if (xPortInIsrContext()) {
         if (mutex_type == queueQUEUE_TYPE_RECURSIVE_MUTEX) {
             abort(); /* indicates logic bug, it shouldn't be possible to lock recursively in ISR */
         }
@@ -204,4 +215,11 @@ void IRAM_ATTR _lock_release(_lock_t *lock) {
 
 void IRAM_ATTR _lock_release_recursive(_lock_t *lock) {
     lock_release_generic(lock, queueQUEUE_TYPE_RECURSIVE_MUTEX);
+}
+
+/* No-op function, used to force linking this file,
+   instead of the dummy locks implementation from newlib.
+ */
+void newlib_include_locks_impl()
+{
 }

@@ -1,13 +1,13 @@
 
 
 #include <stdio.h>
-#include "rom/miniz.h"
+#include "esp32/rom/miniz.h"
 #include "unity.h"
 
 
 #define DATASIZE (1024*64)
 
-TEST_CASE("Test miniz compression/decompression", "[miniz]")
+TEST_CASE("Test miniz compression/decompression", "[miniz][ignore]")
 {
     int x;
     char b;

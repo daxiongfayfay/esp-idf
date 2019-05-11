@@ -17,7 +17,7 @@
  ******************************************************************************/
 #include <string.h>
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 #if defined(BTA_HH_INCLUDED) && (BTA_HH_INCLUDED == TRUE)
 
 
@@ -75,11 +75,12 @@ UINT8  bta_hh_find_cb(BD_ADDR bda)
             return xx;
         }
 #if BTA_HH_DEBUG
-        else
+        else {
             APPL_TRACE_DEBUG("in_use ? [%d] kdev[%d].hid_handle = %d state = [%d]",
                              bta_hh_cb.kdev[xx].in_use, xx,
                              bta_hh_cb.kdev[xx].hid_handle,
                              bta_hh_cb.kdev[xx].state);
+        }
 #endif
     }
 
@@ -123,7 +124,9 @@ void bta_hh_clean_up_kdev(tBTA_HH_DEV_CB *p_cb)
             bta_hh_cb.le_cb_index[BTA_HH_GET_LE_CB_IDX(p_cb->hid_handle)] = BTA_HH_IDX_INVALID;
         } else
 #endif
+        {
             bta_hh_cb.cb_index[p_cb->hid_handle] = BTA_HH_IDX_INVALID;
+        }
     }
 
     /* reset device control block */
@@ -201,7 +204,7 @@ void bta_hh_add_device_to_list(tBTA_HH_DEV_CB *p_cb, UINT8 handle,
 
         if (p_dscp_info->dl_len &&
                 (p_cb->dscp_info.descriptor.dsc_list =
-                     (UINT8 *)GKI_getbuf(p_dscp_info->dl_len)) != NULL) {
+                     (UINT8 *)osi_malloc(p_dscp_info->dl_len)) != NULL) {
             p_cb->dscp_info.descriptor.dl_len = p_dscp_info->dl_len;
             memcpy(p_cb->dscp_info.descriptor.dsc_list, p_dscp_info->dsc_list,
                    p_dscp_info->dl_len);
@@ -486,11 +489,12 @@ UINT8 bta_hh_dev_handle_to_cb_idx(UINT8 dev_handle)
 #endif
     } else
 #endif
+    {
         /* regular HID device checking */
         if (dev_handle < BTA_HH_MAX_KNOWN ) {
             index = bta_hh_cb.cb_index[dev_handle];
         }
-
+    }
     return index;
 
 }

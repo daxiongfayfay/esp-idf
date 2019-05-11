@@ -23,15 +23,18 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
-#include "bta_hh_api.h"
+#include "common/bt_target.h"
+#include "bta/bta_hh_api.h"
+
+#if defined(BTA_HH_INCLUDED) && (BTA_HH_INCLUDED == TRUE)
+
 
 /* max number of device types supported by BTA */
 #define BTA_HH_MAX_DEVT_SPT         9
 
 /* size of database for service discovery */
 #ifndef BTA_HH_DISC_BUF_SIZE
-#define BTA_HH_DISC_BUF_SIZE        GKI_MAX_BUF_SIZE
+#define BTA_HH_DISC_BUF_SIZE        BT_DEFAULT_BUFFER_SIZE
 #endif
 
 
@@ -58,3 +61,4 @@ const tBTA_HH_CFG bta_hh_cfg = {
 
 
 tBTA_HH_CFG *p_bta_hh_cfg = (tBTA_HH_CFG *) &bta_hh_cfg;
+#endif  ///defined(BTA_HH_INCLUDED) && (BTA_HH_INCLUDED == TRUE)

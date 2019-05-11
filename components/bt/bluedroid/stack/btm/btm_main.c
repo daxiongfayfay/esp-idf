@@ -23,15 +23,18 @@
  *
  ******************************************************************************/
 
-#include "bt_types.h"
-#include "bt_target.h"
+#include "stack/bt_types.h"
+#include "common/bt_target.h"
 #include <string.h>
 #include "btm_int.h"
+#include "osi/allocator.h"
 
 /* Global BTM control block structure
 */
 #if BTM_DYNAMIC_MEMORY == FALSE
 tBTM_CB  btm_cb;
+#else
+tBTM_CB  *btm_cb_ptr;
 #endif
 
 /*******************************************************************************
@@ -48,8 +51,13 @@ tBTM_CB  btm_cb;
 *******************************************************************************/
 void btm_init (void)
 {
+#if BTM_DYNAMIC_MEMORY
+    btm_cb_ptr = (tBTM_CB *)osi_malloc(sizeof(tBTM_CB));
+#endif /* #if BTM_DYNAMIC_MEMORY */
     /* All fields are cleared; nonzero fields are reinitialized in appropriate function */
     memset(&btm_cb, 0, sizeof(tBTM_CB));
+    btm_cb.page_queue = fixed_queue_new(QUEUE_SIZE_MAX);
+    btm_cb.sec_pending_q = fixed_queue_new(QUEUE_SIZE_MAX);
 
 #if defined(BTM_INITIAL_TRACE_LEVEL)
     btm_cb.trace_level = BTM_INITIAL_TRACE_LEVEL;
@@ -59,12 +67,35 @@ void btm_init (void)
     /* Initialize BTM component structures */
     btm_inq_db_init();                  /* Inquiry Database and Structures */
     btm_acl_init();                     /* ACL Database and Structures */
+#if (SMP_INCLUDED == TRUE)
     btm_sec_init(BTM_SEC_MODE_SP);      /* Security Manager Database and Structures */
+#endif  ///SMP_INCLUDED == TRUE
 #if BTM_SCO_INCLUDED == TRUE
     btm_sco_init();                     /* SCO Database and Structures (If included) */
 #endif
 
     btm_dev_init();                     /* Device Manager Structures & HCI_Reset */
+    btm_lock_init();
+    btm_sem_init();
 }
 
 
+/*******************************************************************************
+**
+** Function         btm_free
+**
+** Description      This function is called at btu core free the fixed queue
+**
+** Returns          void
+**
+*******************************************************************************/
+void btm_free(void)
+{
+    fixed_queue_free(btm_cb.page_queue, osi_free_func);
+    fixed_queue_free(btm_cb.sec_pending_q, osi_free_func);
+#if BTM_DYNAMIC_MEMORY
+    FREE_AND_RESET(btm_cb_ptr);
+#endif
+    btm_lock_free();
+    btm_sem_free();
+}

@@ -1,7 +1,7 @@
 
 #include <esp_types.h>
 #include <stdio.h>
-#include "rom/ets_sys.h"
+#include "esp32/rom/ets_sys.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,6 +12,7 @@
 #include "soc/uart_reg.h"
 #include "soc/dport_reg.h"
 #include "soc/io_mux_reg.h"
+#include "driver/gpio.h"
 
 
 /*
@@ -96,7 +97,7 @@ static void tskTwo(void *pvParameters)
 
 
 // TODO: split this thing into separate orthogonal tests
-TEST_CASE("Fast I/O bus test", "[hw]")
+TEST_CASE("Fast I/O bus test", "[hw][ignore]")
 {
     int i;
     if ((REG_UART_BASE(0) >> 16) != 0x3ff4) {
@@ -104,7 +105,7 @@ TEST_CASE("Fast I/O bus test", "[hw]")
         TEST_ASSERT(0);
     }
 
-    PIN_PULLUP_DIS(PERIPHS_IO_MUX_SD_DATA3_U);
+    gpio_pullup_dis(10);
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_SD_DATA2_U, FUNC_SD_DATA2_U1RXD);
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_SD_DATA3_U, FUNC_SD_DATA3_U1TXD);
 

@@ -14,7 +14,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_intr.h"
+#include "esp_intr_alloc.h"
 #include "esp_intr_alloc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/xtensa_api.h"
@@ -35,6 +35,7 @@ static const char* TIMER_TAG = "timer_group";
 #define TIMER_AUTORELOAD_ERROR  "HW TIMER AUTORELOAD ERROR"
 #define TIMER_SCALE_ERROR       "HW TIMER SCALE ERROR"
 #define TIMER_ALARM_ERROR       "HW TIMER ALARM ERROR"
+#define DIVIDER_RANGE_ERROR     "HW TIMER divider outside of [2, 65536] range error"
 static timg_dev_t *TG[2] = {&TIMERG0, &TIMERG1};
 static portMUX_TYPE timer_spinlock[TIMER_GROUP_MAX] = {portMUX_INITIALIZER_UNLOCKED, portMUX_INITIALIZER_UNLOCKED};
 
@@ -123,14 +124,15 @@ esp_err_t timer_set_auto_reload(timer_group_t group_num, timer_idx_t timer_num, 
     return ESP_OK;
 }
 
-esp_err_t timer_set_divider(timer_group_t group_num, timer_idx_t timer_num, uint16_t divider)
+esp_err_t timer_set_divider(timer_group_t group_num, timer_idx_t timer_num, uint32_t divider)
 {
     TIMER_CHECK(group_num < TIMER_GROUP_MAX, TIMER_GROUP_NUM_ERROR, ESP_ERR_INVALID_ARG);
     TIMER_CHECK(timer_num < TIMER_MAX, TIMER_NUM_ERROR, ESP_ERR_INVALID_ARG);
+    TIMER_CHECK(divider > 1 && divider < 65537, DIVIDER_RANGE_ERROR, ESP_ERR_INVALID_ARG);
     TIMER_ENTER_CRITICAL(&timer_spinlock[group_num]);
     int timer_en = TG[group_num]->hw_timer[timer_num].config.enable;
     TG[group_num]->hw_timer[timer_num].config.enable = 0;
-    TG[group_num]->hw_timer[timer_num].config.divider = divider;
+    TG[group_num]->hw_timer[timer_num].config.divider = (uint16_t) divider;
     TG[group_num]->hw_timer[timer_num].config.enable = timer_en;
     TIMER_EXIT_CRITICAL(&timer_spinlock[group_num]);
     return ESP_OK;
@@ -204,11 +206,12 @@ esp_err_t timer_isr_register(timer_group_t group_num, timer_idx_t timer_num,
     return esp_intr_alloc_intrstatus(intr_source, intr_alloc_flags, status_reg, mask, fn, arg, handle);
 }
 
-esp_err_t timer_init(timer_group_t group_num, timer_idx_t timer_num, timer_config_t *config)
+esp_err_t timer_init(timer_group_t group_num, timer_idx_t timer_num, const timer_config_t *config)
 {
     TIMER_CHECK(group_num < TIMER_GROUP_MAX, TIMER_GROUP_NUM_ERROR, ESP_ERR_INVALID_ARG);
     TIMER_CHECK(timer_num < TIMER_MAX, TIMER_NUM_ERROR, ESP_ERR_INVALID_ARG);
     TIMER_CHECK(config != NULL, TIMER_PARAM_ADDR_ERROR, ESP_ERR_INVALID_ARG);
+    TIMER_CHECK(config->divider > 1 && config->divider < 65537, DIVIDER_RANGE_ERROR, ESP_ERR_INVALID_ARG);
 
     if(group_num == 0) {
         periph_module_enable(PERIPH_TIMG0_MODULE);
@@ -216,8 +219,13 @@ esp_err_t timer_init(timer_group_t group_num, timer_idx_t timer_num, timer_confi
         periph_module_enable(PERIPH_TIMG1_MODULE);
     }
     TIMER_ENTER_CRITICAL(&timer_spinlock[group_num]);
+    //Some applications use a software reset, at the reset time, timer_group happens to generate an interrupt.
+    //but software reset does not clear interrupt status. This is not safe for application when enable the interrupt of timer_group.
+    //we need to disable the interrupt and clear the interrupt status here.
+    TG[group_num]->int_ena.val &= (~BIT(timer_num));
+    TG[group_num]->int_clr_timers.val = BIT(timer_num);
     TG[group_num]->hw_timer[timer_num].config.autoreload = config->auto_reload;
-    TG[group_num]->hw_timer[timer_num].config.divider = config->divider;
+    TG[group_num]->hw_timer[timer_num].config.divider = (uint16_t) config->divider;
     TG[group_num]->hw_timer[timer_num].config.enable = config->counter_en;
     TG[group_num]->hw_timer[timer_num].config.increase = config->counter_dir;
     TG[group_num]->hw_timer[timer_num].config.alarm_en = config->alarm_en;
@@ -236,10 +244,11 @@ esp_err_t timer_get_config(timer_group_t group_num, timer_idx_t timer_num, timer
     config->alarm_en = TG[group_num]->hw_timer[timer_num].config.alarm_en;
     config->auto_reload = TG[group_num]->hw_timer[timer_num].config.autoreload;
     config->counter_dir = TG[group_num]->hw_timer[timer_num].config.increase;
-    config->counter_dir = TG[group_num]->hw_timer[timer_num].config.divider;
+    config->divider =  (TG[group_num]->hw_timer[timer_num].config.divider == 0 ?
+        65536 : TG[group_num]->hw_timer[timer_num].config.divider);
     config->counter_en = TG[group_num]->hw_timer[timer_num].config.enable;
     if(TG[group_num]->hw_timer[timer_num].config.level_int_en) {
-        config->intr_type =TIMER_INTR_LEVEL;
+        config->intr_type = TIMER_INTR_LEVEL;
     }
     TIMER_EXIT_CRITICAL(&timer_spinlock[group_num]);
     return ESP_OK;

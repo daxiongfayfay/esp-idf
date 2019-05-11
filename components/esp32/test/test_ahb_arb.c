@@ -2,9 +2,9 @@
 #include <esp_types.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "rom/ets_sys.h"
-#include "rom/lldesc.h"
-#include "rom/gpio.h"
+#include "esp32/rom/ets_sys.h"
+#include "esp32/rom/lldesc.h"
+#include "esp32/rom/gpio.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,6 +22,7 @@
 #include "soc/i2s_reg.h"
 
 
+
 #define DPORT_I2S0_CLK_EN   (BIT(4))
 #define DPORT_I2S0_RST   (BIT(4))
 
@@ -34,8 +35,8 @@ the point where they happened to do what I want.
 
 static void lcdIfaceInit()
 {
-    SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S0_CLK_EN);
-    CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S0_RST);
+    DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S0_CLK_EN);
+    DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S0_RST);
 
     //Init pins to i2s functions
     SET_PERI_REG_MASK(GPIO_ENABLE_W1TS_REG, (1 << 11) | (1 << 3) | (1 << 0) | (1 << 2) | (1 << 5) | (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)); //ENABLE GPIO oe_enable
@@ -269,7 +270,7 @@ static void tskTwo(void *pvParameters)
 }
 
 
-TEST_CASE("S32C1I vs AHB test (needs I2S)", "[hw]")
+TEST_CASE("S32C1I vs AHB test (needs I2S)", "[hw][ignore]")
 {
     int i;
     TaskHandle_t th[3];

@@ -22,14 +22,13 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
-#if defined(BTA_GATT_INCLUDED) && (BTA_GATT_INCLUDED == TRUE)
+#if defined(GATTS_INCLUDED) && (GATTS_INCLUDED == TRUE)
 
 #include <string.h>
-#include "utl.h"
-#include "gki.h"
-#include "bta_sys.h"
+#include "bta/utl.h"
+#include "bta/bta_sys.h"
 #include "bta_gatts_int.h"
 
 static const UINT8  base_uuid[LEN_UUID_128] = {0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
@@ -222,4 +221,4 @@ BOOLEAN bta_gatts_uuid_compare(tBT_UUID tar, tBT_UUID src)
 
 
 
-#endif
+#endif  /* GATTS_INCLUDED */

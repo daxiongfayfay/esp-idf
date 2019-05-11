@@ -18,7 +18,7 @@
 
 #include <string.h>
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 //#include "bt_utils.h"
 #include "gap_int.h"
 
@@ -69,7 +69,7 @@ void GAP_Init(void)
     gap_conn_init();
 #endif
 
-#if BLE_INCLUDED == TRUE
+#if BLE_INCLUDED == TRUE && GATTS_INCLUDED == TRUE
     gap_attr_db_init();
 #endif
 }

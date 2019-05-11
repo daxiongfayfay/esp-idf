@@ -23,11 +23,13 @@
  ******************************************************************************/
 
 #include <stdlib.h>
-
-#include "bta_api.h"
-#include "bta_sys.h"
-#include "bta_sdp_api.h"
+#include "common/bt_target.h"
+#include "bta/bta_api.h"
+#include "bta/bta_sys.h"
+#include "bta/bta_sdp_api.h"
 #include "bta_sdp_int.h"
+
+#if defined(BTA_SDP_INCLUDED) && (BTA_SDP_INCLUDED == TRUE)
 
 /*****************************************************************************
 ** Constants and types
@@ -35,6 +37,8 @@
 
 #if BTA_DYNAMIC_MEMORY == FALSE
 tBTA_SDP_CB bta_sdp_cb;
+#else
+tBTA_SDP_CB *bta_sdp_cb_ptr;
 #endif
 
 /* state machine action enumeration list */
@@ -75,3 +79,5 @@ BOOLEAN bta_sdp_sm_execute(BT_HDR *p_msg)
 
     return (ret);
 }
+
+#endif /* #if defined(BTA_SDP_INCLUDED) && (BTA_SDP_INCLUDED == TRUE) */

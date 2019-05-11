@@ -26,28 +26,29 @@
 #include <string.h>
 //#include <stdio.h>
 
-#include "bt_target.h"
-//#include "bt_utils.h"
-#include "gki.h"
-#include "l2cdefs.h"
-#include "hcidefs.h"
-#include "hcimsgs.h"
+#include "common/bt_target.h"
+#include "osi/allocator.h"
+#include "stack/l2cdefs.h"
+#include "stack/hcidefs.h"
+#include "stack/hcimsgs.h"
 
-#include "l2c_api.h"
-#include "l2cdefs.h"
+#include "stack/l2c_api.h"
+#include "stack/l2cdefs.h"
 
-#include "btu.h"
-#include "btm_api.h"
+#include "stack/btu.h"
+#include "stack/btm_api.h"
 
-#include "sdp_api.h"
+#include "stack/sdp_api.h"
 #include "sdpint.h"
 
-
+#if (SDP_INCLUDED == TRUE)
 /********************************************************************************/
 /*                       G L O B A L      S D P       D A T A                   */
 /********************************************************************************/
 #if SDP_DYNAMIC_MEMORY == FALSE
 tSDP_CB  sdp_cb;
+#else
+tSDP_CB  *sdp_cb_ptr;
 #endif
 
 /********************************************************************************/
@@ -80,6 +81,9 @@ static void sdp_disconnect_cfm (UINT16 l2cap_cid, UINT16 result);
 *******************************************************************************/
 void sdp_init (void)
 {
+#if SDP_DYNAMIC_MEMORY
+    sdp_cb_ptr = (tSDP_CB *)osi_malloc(sizeof(tSDP_CB));
+#endif /* #if SDP_DYNAMIC_MEMORY */
     /* Clears all structures and local SDP database (if Server is enabled) */
     memset (&sdp_cb, 0, sizeof (tSDP_CB));
 
@@ -132,6 +136,14 @@ void sdp_init (void)
     if (!L2CA_Register (SDP_PSM, &sdp_cb.reg_info)) {
         SDP_TRACE_ERROR ("SDP Registration failed\n");
     }
+}
+
+void sdp_deinit (void)
+{
+#if SDP_DYNAMIC_MEMORY
+    osi_free(sdp_cb_ptr);
+    sdp_cb_ptr = NULL;
+#endif /* #if SDP_DYNAMIC_MEMORY */
 }
 
 #if (defined(SDP_DEBUG) && SDP_DEBUG == TRUE)
@@ -455,12 +467,13 @@ static void sdp_disconnect_ind (UINT16 l2cap_cid, BOOLEAN ack_needed)
     SDP_TRACE_EVENT ("SDP - Rcvd L2CAP disc, CID: 0x%x\n", l2cap_cid);
 #if SDP_CLIENT_ENABLED == TRUE
     /* Tell the user if he has a callback */
-    if (p_ccb->p_cb)
+    if (p_ccb->p_cb) {
         (*p_ccb->p_cb) ((UINT16) ((p_ccb->con_state == SDP_STATE_CONNECTED) ?
                                   SDP_SUCCESS : SDP_CONN_FAILED));
-    else if (p_ccb->p_cb2)
+    } else if (p_ccb->p_cb2) {
         (*p_ccb->p_cb2) ((UINT16) ((p_ccb->con_state == SDP_STATE_CONNECTED) ?
                                    SDP_SUCCESS : SDP_CONN_FAILED), p_ccb->user_data);
+    }
 
 #endif
     sdpu_release_ccb (p_ccb);
@@ -501,7 +514,7 @@ static void sdp_data_ind (UINT16 l2cap_cid, BT_HDR *p_msg)
         SDP_TRACE_WARNING ("SDP - Rcvd L2CAP data, unknown CID: 0x%x\n", l2cap_cid);
     }
 
-    GKI_freebuf (p_msg);
+    osi_free (p_msg);
 }
 
 
@@ -688,6 +701,7 @@ void sdp_conn_timeout (tCONN_CB *p_ccb)
     sdpu_release_ccb (p_ccb);
 }
 
+#endif  ///SDP_INCLUDED == TRUE
 
 
 

@@ -16,9 +16,9 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 //#include "bt_utils.h"
-//#include "gatt_api.h"
+//#include "stack/gatt_api.h"
 
 #define LOG_TAG "bt_srvc"
 //#include "osi/include/log.h"
@@ -26,14 +26,14 @@
 #include "stdint.h"
 #include "string.h"
 
-#include "bta_api.h"
-#include "bta_gatt_api.h"
-#include "controller.h"
+#include "bta/bta_api.h"
+#include "bta/bta_gatt_api.h"
+#include "device/controller.h"
 
 #include "gatt_int.h"
-#include "bt_trace.h"
-#include "btm_api.h"
-#include "bt_types.h"
+#include "common/bt_trace.h"
+#include "stack/btm_api.h"
+#include "stack/bt_types.h"
 #include "dis_api.h"
 
 #if BLE_INCLUDED == TRUE
@@ -266,13 +266,13 @@ tDIS_STATUS DIS_SrUpdate(tDIS_ATTR_BIT dis_attr_bit, tDIS_ATTR *p_info)
         while (dis_attr_bit && i < (DIS_MAX_CHAR_NUM - 1 )) {
             if (dis_attr_bit & (UINT16)(1 << i)) {
                 if (dis_cb.dis_value.data_string[i - 1] != NULL) {
-                    GKI_freebuf(dis_cb.dis_value.data_string[i - 1]);
+                    osi_free(dis_cb.dis_value.data_string[i - 1]);
                 }
                 /* coverity[OVERRUN-STATIC] False-positive : when i = 8, (1 << i) == DIS_ATTR_PNP_ID_BIT, and it will never come down here
                 CID 49902: Out-of-bounds read (OVERRUN_STATIC)
                 Overrunning static array "dis_cb.dis_value.data_string", with 7 elements, at position 7 with index variable "i".
                 */
-                if ((dis_cb.dis_value.data_string[i - 1] = (UINT8 *)GKI_getbuf((UINT16)(p_info->data_str.len + 1))) != NULL) {
+                if ((dis_cb.dis_value.data_string[i - 1] = (UINT8 *)osi_malloc((UINT16)(p_info->data_str.len + 1))) != NULL) {
 
                     memcpy(dis_cb.dis_value.data_string[i - 1], p_info->data_str.p_data, p_info->data_str.len);
                     dis_cb.dis_value.data_string[i - 1][p_info->data_str.len] = 0; /* make sure null terminate */

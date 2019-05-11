@@ -1,4 +1,4 @@
-// Copyright 2016 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2016-2018 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,14 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include "esp_err.h"
+#include "soc/soc.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#define ULP_FSM_PREPARE_SLEEP_CYCLES 2    /*!< Cycles spent by FSM preparing ULP for sleep */
+#define ULP_FSM_WAKEUP_SLEEP_CYCLES  2    /*!< Cycles spent by FSM waking up ULP from sleep */
 
 /**
  * @defgroup ulp_registers ULP coprocessor registers
@@ -50,6 +53,7 @@ extern "C" {
 #define RD_REG_PERIPH_RTC_CNTL 0    /*!< Identifier of RTC_CNTL peripheral for RD_REG and WR_REG instructions */
 #define RD_REG_PERIPH_RTC_IO   1    /*!< Identifier of RTC_IO peripheral for RD_REG and WR_REG instructions */
 #define RD_REG_PERIPH_SENS     2    /*!< Identifier of SARADC peripheral for RD_REG and WR_REG instructions */
+#define RD_REG_PERIPH_RTC_I2C  3    /*!< Identifier of RTC_I2C peripheral for RD_REG and WR_REG instructions */
 
 #define OPCODE_I2C 3            /*!< Instruction: read/write I2C (not implemented yet) */
 
@@ -81,7 +85,7 @@ extern "C" {
 #define B_CMP_L 0               /*!< Branch if R0 is less than an immediate */
 #define B_CMP_GE 1              /*!< Branch if R0 is greater than or equal to an immediate */
 
-#define OPCODE_END 9            /*!< Stop executing the program (not implemented yet) */
+#define OPCODE_END 9            /*!< Stop executing the program */
 #define SUB_OPCODE_END 0        /*!< Stop executing the program and optionally wake up the chip */
 #define SUB_OPCODE_SLEEP 1      /*!< Stop executing the program and run it again after selected interval */
 
@@ -222,7 +226,7 @@ typedef union {
     struct {
         uint32_t dreg : 2;          /*!< Register where to store temperature measurement result */
         uint32_t wait_delay: 14;    /*!< Cycles to wait after measurement is done */
-        uint32_t cycles: 12;        /*!< Cycles used to perform measurement */
+        uint32_t reserved: 12;      /*!< Reserved, set to 0 */
         uint32_t opcode: 4;         /*!< Opcode (OPCODE_TSENS) */
     } tsens;                        /*!< Format of TSENS instruction */
 
@@ -266,12 +270,17 @@ _Static_assert(sizeof(ulp_insn_t) == 4, "ULP coprocessor instruction size should
  * Delay (nop) for a given number of cycles
  */
 #define I_DELAY(cycles_) { .delay = {\
-    .opcode = OPCODE_DELAY, \
+    .cycles = cycles_, \
     .unused = 0, \
-    .cycles = cycles_ } }
+    .opcode = OPCODE_DELAY } }
 
 /**
- * Halt the coprocessor
+ * Halt the coprocessor.
+ *
+ * This instruction halts the coprocessor, but keeps ULP timer active.
+ * As such, ULP program will be restarted again by timer.
+ * To stop the program and prevent the timer from restarting the program,
+ * use I_END(0) instruction.
  */
 #define I_HALT() { .halt = {\
     .unused = 0, \
@@ -281,7 +290,7 @@ _Static_assert(sizeof(ulp_insn_t) == 4, "ULP coprocessor instruction size should
  * Map SoC peripheral register to periph_sel field of RD_REG and WR_REG
  * instructions.
  *
- * @param reg peripheral register in RTC_CNTL_, RTC_IO_, SENS_ peripherals.
+ * @param reg peripheral register in RTC_CNTL_, RTC_IO_, SENS_, RTC_I2C peripherals.
  * @return periph_sel value for the peripheral to which this register belongs.
  */
 static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
@@ -292,8 +301,10 @@ static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
         ret = RD_REG_PERIPH_RTC_CNTL;
     } else if (reg < DR_REG_SENS_BASE) {
         ret = RD_REG_PERIPH_RTC_IO;
-    } else if (reg < DR_REG_RTCMEM0_BASE){
+    } else if (reg < DR_REG_RTC_I2C_BASE){
         ret = RD_REG_PERIPH_SENS;
+    } else if (reg < DR_REG_IO_MUX_BASE){
+        ret = RD_REG_PERIPH_RTC_I2C;
     } else {
         assert(0 && "invalid register base");
     }
@@ -304,10 +315,10 @@ static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
  * Write literal value to a peripheral register
  *
  * reg[high_bit : low_bit] = val
- * This instruction can access RTC_CNTL_, RTC_IO_, and SENS_ peripheral registers.
+ * This instruction can access RTC_CNTL_, RTC_IO_, SENS_, and RTC_I2C peripheral registers.
  */
 #define I_WR_REG(reg, low_bit, high_bit, val) {.wr_reg = {\
-    .addr = reg & 0xff, \
+    .addr = (reg & 0xff) / sizeof(uint32_t), \
     .periph_sel = SOC_REG_TO_ULP_PERIPH_SEL(reg), \
     .data = val, \
     .low = low_bit, \
@@ -318,10 +329,10 @@ static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
  * Read from peripheral register into R0
  *
  * R0 = reg[high_bit : low_bit]
- * This instruction can access RTC_CNTL_, RTC_IO_, and SENS_ peripheral registers.
+ * This instruction can access RTC_CNTL_, RTC_IO_, SENS_, and RTC_I2C peripheral registers.
  */
-#define I_RD_REG(reg, low_bit, high_bit, val) {.wr_reg = {\
-    .addr = reg & 0xff, \
+#define I_RD_REG(reg, low_bit, high_bit) {.rd_reg = {\
+    .addr = (reg & 0xff) / sizeof(uint32_t), \
     .periph_sel = SOC_REG_TO_ULP_PERIPH_SEL(reg), \
     .unused = 0, \
     .low = low_bit, \
@@ -329,15 +340,95 @@ static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
     .opcode = OPCODE_RD_REG } }
 
 /**
- * End program.
+ * Set or clear a bit in the peripheral register.
  *
- * If wake == 1, wake up main CPU.
+ * Sets bit (1 << shift) of register reg to value val.
+ * This instruction can access RTC_CNTL_, RTC_IO_, SENS_, and RTC_I2C peripheral registers.
  */
-#define I_END(wake) { .end = { \
-        .wakeup = wake, \
+#define I_WR_REG_BIT(reg, shift, val) I_WR_REG(reg, shift, shift, val)
+
+/**
+ * Wake the SoC from deep sleep.
+ *
+ * This instruction initiates wake up from deep sleep.
+ * Use esp_deep_sleep_enable_ulp_wakeup to enable deep sleep wakeup
+ * triggered by the ULP before going into deep sleep.
+ * Note that ULP program will still keep running until the I_HALT
+ * instruction, and it will still be restarted by timer at regular
+ * intervals, even when the SoC is woken up.
+ *
+ * To stop the ULP program, use I_HALT instruction.
+ *
+ * To disable the timer which start ULP program, use I_END()
+ * instruction. I_END instruction clears the
+ * RTC_CNTL_ULP_CP_SLP_TIMER_EN_S bit of RTC_CNTL_STATE0_REG
+ * register, which controls the ULP timer.
+ */
+#define I_WAKE() { .end = { \
+        .wakeup = 1, \
         .unused = 0, \
         .sub_opcode = SUB_OPCODE_END, \
         .opcode = OPCODE_END } }
+
+/**
+ * Stop ULP program timer.
+ *
+ * This is a convenience macro which disables the ULP program timer.
+ * Once this instruction is used, ULP program will not be restarted
+ * anymore until ulp_run function is called.
+ *
+ * ULP program will continue running after this instruction. To stop
+ * the currently running program, use I_HALT().
+ */
+#define I_END() \
+    I_WR_REG_BIT(RTC_CNTL_STATE0_REG, RTC_CNTL_ULP_CP_SLP_TIMER_EN_S, 0)
+/**
+ * Select the time interval used to run ULP program.
+ *
+ * This instructions selects which of the SENS_SLEEP_CYCLES_Sx
+ * registers' value is used by the ULP program timer.
+ * When the ULP program stops at I_HALT instruction, ULP program
+ * timer start counting. When the counter reaches the value of
+ * the selected SENS_SLEEP_CYCLES_Sx register, ULP program
+ * start running again from the start address (passed to the ulp_run
+ * function).
+ * There are 5 SENS_SLEEP_CYCLES_Sx registers, so 0 <= timer_idx < 5.
+ *
+ * By default, SENS_SLEEP_CYCLES_S0 register is used by the ULP
+ * program timer.
+ */
+#define I_SLEEP_CYCLE_SEL(timer_idx) { .sleep = { \
+        .cycle_sel = timer_idx, \
+        .unused = 0, \
+        .sub_opcode = SUB_OPCODE_SLEEP, \
+        .opcode = OPCODE_END } }
+
+/**
+ * Perform temperature sensor measurement and store it into reg_dest.
+ *
+ * Delay can be set between 1 and ((1 << 14) - 1). Higher values give
+ * higher measurement resolution.
+ */
+#define I_TSENS(reg_dest, delay) { .tsens = { \
+        .dreg = reg_dest, \
+        .wait_delay = delay, \
+        .reserved = 0, \
+        .opcode = OPCODE_TSENS } }
+
+/**
+ * Perform ADC measurement and store result in reg_dest.
+ *
+ * adc_idx selects ADC (0 or 1).
+ * pad_idx selects ADC pad (0 - 7).
+ */
+#define I_ADC(reg_dest, adc_idx, pad_idx) { .adc = {\
+        .dreg = reg_dest, \
+        .mux = pad_idx + 1, \
+        .sar_sel = adc_idx, \
+        .unused1 = 0, \
+        .cycles = 0, \
+        .unused2 = 0, \
+        .opcode = OPCODE_ADC } }
 
 /**
  * Store value from register reg_val into RTC memory.
@@ -345,9 +436,9 @@ static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
  * The value is written to an offset calculated by adding value of
  * reg_addr register and offset_ field (this offset is expressed in 32-bit words).
  * 32 bits written to RTC memory are built as follows:
- * - 5 MSBs are zero
- * - next 11 bits hold the PC of current instruction, expressed in 32-bit words
- * - next 16 bits hold the actual value to be written
+ * - bits [31:21] hold the PC of current instruction, expressed in 32-bit words
+ * - bits [20:16] = 5'b1
+ * - bits [15:0] are assigned the contents of reg_val
  *
  * RTC_SLOW_MEM[addr + offset_] = { 5'b0, insn_PC[10:0], val[15:0] }
  */
@@ -763,12 +854,66 @@ static inline uint32_t SOC_REG_TO_ULP_PERIPH_SEL(uint32_t reg) {
 esp_err_t ulp_process_macros_and_load(uint32_t load_addr, const ulp_insn_t* program, size_t* psize);
 
 /**
+ * @brief Load ULP program binary into RTC memory
+ *
+ * ULP program binary should have the following format (all values little-endian):
+ *
+ * 1. MAGIC, (value 0x00706c75, 4 bytes)
+ * 2. TEXT_OFFSET, offset of .text section from binary start (2 bytes)
+ * 3. TEXT_SIZE, size of .text section (2 bytes)
+ * 4. DATA_SIZE, size of .data section (2 bytes)
+ * 5. BSS_SIZE, size of .bss section (2 bytes)
+ * 6. (TEXT_OFFSET - 12) bytes of arbitrary data (will not be loaded into RTC memory)
+ * 7. .text section
+ * 8. .data section
+ *
+ * Linker script in components/ulp/ld/esp32.ulp.ld produces ELF files which
+ * correspond to this format. This linker script produces binaries with load_addr == 0.
+ *
+ * @param load_addr address where the program should be loaded, expressed in 32-bit words
+ * @param program_binary pointer to program binary
+ * @param program_size size of the program binary
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if load_addr is out of range
+ *      - ESP_ERR_INVALID_SIZE if program_size doesn't match (TEXT_OFFSET + TEXT_SIZE + DATA_SIZE)
+ *      - ESP_ERR_NOT_SUPPORTED if the magic number is incorrect
+ */
+esp_err_t ulp_load_binary(uint32_t load_addr, const uint8_t* program_binary, size_t program_size);
+
+/**
  * @brief Run the program loaded into RTC memory
  * @param entry_point entry point, expressed in 32-bit words
  * @return  ESP_OK on success
  */
 esp_err_t ulp_run(uint32_t entry_point);
 
+/**
+ * @brief Set one of ULP wakeup period values
+ *
+ * ULP coprocessor starts running the program when the wakeup timer counts up
+ * to a given value (called period). There are 5 period values which can be
+ * programmed into SENS_ULP_CP_SLEEP_CYCx_REG registers, x = 0..4.
+ * By default, wakeup timer will use the period set into SENS_ULP_CP_SLEEP_CYC0_REG,
+ * i.e. period number 0. ULP program code can use SLEEP instruction to select
+ * which of the SENS_ULP_CP_SLEEP_CYCx_REG should be used for subsequent wakeups.
+ *
+ * However, please note that SLEEP instruction issued (from ULP program) while the system
+ * is in deep sleep mode does not have effect, and sleep cycle count 0 is used.
+ *
+ * @param period_index wakeup period setting number (0 - 4)
+ * @param period_us wakeup period, us
+ * @note  The ULP FSM requires two clock cycles to wakeup before being able to run the program.
+ *        Then additional 16 cycles are reserved after wakeup waiting until the 8M clock is stable.
+ *        The FSM also requires two more clock cycles to go to sleep after the program execution is halted.
+ *        The minimum wakeup period that may be set up for the ULP
+ *        is equal to the total number of cycles spent on the above internal tasks.
+ *        For a default configuration of the ULP running at 150kHz it makes about 133us.
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if period_index is out of range
+ */
+esp_err_t ulp_set_wakeup_period(size_t period_index, uint32_t period_us);
 
 #ifdef __cplusplus
 }

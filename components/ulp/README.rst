@@ -1,12 +1,7 @@
-ULP coprocessor programming
-===========================
+Programming ULP coprocessor using C macros
+==========================================
 
-.. warning:: ULP coprocessor programming approach described here is experimental. It is probable that once binutils support for ULP is done, this preprocessor-based approach may be deprecated. We welcome discussion about and contributions to ULP programming tools.
-
-ULP coprocessor is a simple FSM which is designed to perform measurements using ADC, temperature sensor, and external I2C sensors, while main processors are in deep sleep mode. ULP coprocessor can access RTC_SLOW_MEM memory region, and registers in RTC_CNTL, RTC_IO, and SARADC peripherals. ULP coprocessor uses fixed-width 32-bit instructions, 32-bit memory addressing, and has 4 general purpose 16-bit registers.
-
-ULP coprocessor doesn't have a dedicated binutils port yet. Programming ULP coprocessor is possible by embedding assembly-like macros into an ESP32 application.
-Here is an example how this can be done::
+In addition to the existing binutils port for the ESP32 ULP coprocessor, it is possible to generate programs for the ULP by embedding assembly-like macros into an ESP32 application. Here is an example how this can be done::
 
     const ulp_insn_t program[] = {
         I_MOVI(R3, 16),         // R3 <- 16
@@ -22,6 +17,10 @@ Here is an example how this can be done::
     ulp_run(load_addr);
 
 The ``program`` array is an array of ``ulp_insn_t``, i.e. ULP coprocessor instructions. Each ``I_XXX`` preprocessor define translates into a single 32-bit instruction. Arguments of these preprocessor defines can be register numbers (``R0 — R3``) and literal constants. See `ULP coprocessor instruction defines`_ section for descriptions of instructions and arguments they take.
+
+.. note::
+
+    Because some of the instruction macros expand to inline function calls, defining such array in global scope will cause the compiler to produce an "initializer element is not constant" error. To fix this error, move the definition of instructions array into local scope.
 
 Load and store instructions use addresses expressed in 32-bit words. Address 0 corresponds to the first word of ``RTC_SLOW_MEM`` (which is address 0x50000000 as seen by the main CPUs).
 

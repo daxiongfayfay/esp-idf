@@ -18,37 +18,32 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "driver/gpio.h"
-
+#include "soc/rtc_gpio_channel.h"
+#include "soc/rtc_periph.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * @brief Pullup/pulldown information for a single GPIO pad
- */
-typedef struct {
-    uint32_t reg;       /*!< Register of RTC pad, or 0 if not an RTC GPIO */
-    uint32_t mux;       /*!< Bit mask for selecting digital pad or RTC pad */
-    uint32_t func;      /*!< Shift of pad function (FUN_SEL) field */
-    uint32_t ie;        /*!< Mask of input enable */
-    uint32_t pullup;    /*!< Mask of pullup enable */
-    uint32_t pulldown;  /*!< Mask of pulldown enable */
-    uint32_t slpsel;    /*!< If slpsel bit is set, slpie will be used as pad input enabled signal in sleep mode */
-    uint32_t slpie;     /*!< Mask of input enable in sleep mode */
-    uint32_t hold;      /*!< Mask of hold_force bit for RTC IO in RTC_CNTL_HOLD_FORCE_REG */
-    int rtc_num;        /*!< RTC IO number, or -1 if not an RTC GPIO */
-} rtc_gpio_desc_t;
-
 typedef enum {
-    RTC_GPIO_MODE_INPUT_ONLY , /*!< Pad output */
-    RTC_GPIO_MODE_OUTPUT_ONLY, /*!< Pad input */
-    RTC_GPIO_MODE_INPUT_OUTUT, /*!< Pad pull output + input */
+    RTC_GPIO_MODE_INPUT_ONLY , /*!< Pad input */
+    RTC_GPIO_MODE_OUTPUT_ONLY, /*!< Pad output */
+    RTC_GPIO_MODE_INPUT_OUTPUT, /*!< Pad pull input + output */
     RTC_GPIO_MODE_DISABLED,    /*!< Pad (output + input) disable */
 } rtc_gpio_mode_t;
 
-#define RTC_GPIO_IS_VALID_GPIO(gpio_num)      ((gpio_num < GPIO_PIN_COUNT && rtc_gpio_desc[gpio_num].reg != 0))   //to decide whether it is a valid GPIO number
+/**
+ * @brief Determine if the specified GPIO is a valid RTC GPIO.
+ *
+ * @param gpio_num GPIO number
+ * @return true if GPIO is valid for RTC GPIO use. false otherwise.
+ */
+inline static bool rtc_gpio_is_valid_gpio(gpio_num_t gpio_num)
+{
+    return gpio_num < GPIO_PIN_COUNT
+        && rtc_gpio_desc[gpio_num].reg != 0;
+}
 
-extern const rtc_gpio_desc_t rtc_gpio_desc[GPIO_PIN_COUNT];
+#define RTC_GPIO_IS_VALID_GPIO(gpio_num) rtc_gpio_is_valid_gpio(gpio_num) // Deprecated, use rtc_gpio_is_valid_gpio()
 
 /**
  * @brief Init a GPIO as RTC GPIO
@@ -170,15 +165,108 @@ esp_err_t rtc_gpio_pullup_dis(gpio_num_t gpio_num);
 esp_err_t rtc_gpio_pulldown_dis(gpio_num_t gpio_num);
 
 /**
- * @brief Disable "hold" signal for all RTC IOs
+ * @brief Enable hold function on an RTC IO pad
  *
- * Each RTC pad has a "hold" input signal from the RTC controller.
- * If hold signal is set, pad latches current values of input enable,
+ * Enabling HOLD function will cause the pad to latch current values of
+ * input enable, output enable, output value, function, drive strength values.
+ * This function is useful when going into light or deep sleep mode to prevent
+ * the pin configuration from changing.
+ *
+ * @param gpio_num GPIO number (e.g. GPIO_NUM_12)
+ * @return
+ *     - ESP_OK Success
+ *     - ESP_ERR_INVALID_ARG GPIO is not an RTC IO
+ */
+esp_err_t rtc_gpio_hold_en(gpio_num_t gpio_num);
+
+/**
+ * @brief Disable hold function on an RTC IO pad
+ *
+ * Disabling hold function will allow the pad receive the values of
+ * input enable, output enable, output value, function, drive strength from
+ * RTC_IO peripheral.
+ *
+ * @param gpio_num GPIO number (e.g. GPIO_NUM_12)
+ * @return
+ *     - ESP_OK Success
+ *     - ESP_ERR_INVALID_ARG GPIO is not an RTC IO
+ */
+esp_err_t rtc_gpio_hold_dis(gpio_num_t gpio_num);
+
+/**
+ * @brief Helper function to disconnect internal circuits from an RTC IO
+ * This function disables input, output, pullup, pulldown, and enables
+ * hold feature for an RTC IO.
+ * Use this function if an RTC IO needs to be disconnected from internal
+ * circuits in deep sleep, to minimize leakage current.
+ *
+ * In particular, for ESP32-WROVER module, call
+ * rtc_gpio_isolate(GPIO_NUM_12) before entering deep sleep, to reduce
+ * deep sleep current.
+ *
+ * @param gpio_num GPIO number (e.g. GPIO_NUM_12).
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if GPIO is not an RTC IO
+ */
+esp_err_t rtc_gpio_isolate(gpio_num_t gpio_num);
+
+/**
+ * @brief Disable force hold signal for all RTC IOs
+ *
+ * Each RTC pad has a "force hold" input signal from the RTC controller.
+ * If this signal is set, pad latches current values of input enable,
  * function, output enable, and other signals which come from the RTC mux.
- * Hold signal is enabled before going into deep sleep for pins which
+ * Force hold signal is enabled before going into deep sleep for pins which
  * are used for EXT1 wakeup.
  */
-void rtc_gpio_unhold_all();
+void rtc_gpio_force_hold_dis_all();
+
+/**
+ * @brief Set RTC GPIO pad drive capability
+ *
+ * @param gpio_num GPIO number, only support output GPIOs
+ * @param strength Drive capability of the pad
+ *
+ * @return
+ *     - ESP_OK Success
+ *     - ESP_ERR_INVALID_ARG Parameter error
+ */
+esp_err_t rtc_gpio_set_drive_capability(gpio_num_t gpio_num, gpio_drive_cap_t strength);
+
+/**
+ * @brief Get RTC GPIO pad drive capability
+ *
+ * @param gpio_num GPIO number, only support output GPIOs
+ * @param strength Pointer to accept drive capability of the pad
+ *
+ * @return
+ *     - ESP_OK Success
+ *     - ESP_ERR_INVALID_ARG Parameter error
+ */
+esp_err_t rtc_gpio_get_drive_capability(gpio_num_t gpio_num, gpio_drive_cap_t* strength);
+
+/**
+ * @brief Enable wakeup from sleep mode using specific GPIO
+ * @param gpio_num  GPIO number
+ * @param intr_type  Wakeup on high level (GPIO_INTR_HIGH_LEVEL) or low level
+ *                   (GPIO_INTR_LOW_LEVEL)
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if gpio_num is not an RTC IO, or intr_type is not
+ *        one of GPIO_INTR_HIGH_LEVEL, GPIO_INTR_LOW_LEVEL.
+ */
+esp_err_t rtc_gpio_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type);
+
+/**
+ * @brief Disable wakeup from sleep mode using specific GPIO
+ * @param gpio_num  GPIO number
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if gpio_num is not an RTC IO
+ */
+esp_err_t rtc_gpio_wakeup_disable(gpio_num_t gpio_num);
+
 
 
 #ifdef __cplusplus

@@ -4,7 +4,7 @@
 
 #include <esp_types.h>
 #include <stdio.h>
-#include "rom/ets_sys.h"
+#include "esp32/rom/ets_sys.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,7 +17,7 @@
 #include "soc/io_mux_reg.h"
 
 
-TEST_CASE("Panic handler", "[freertos]")
+TEST_CASE("Panic handler", "[freertos][ignore]")
 {
     volatile int *i;
     i = (volatile int *)0x0;

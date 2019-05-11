@@ -22,17 +22,17 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
-#if BLE_INCLUDED == TRUE
+#if BLE_INCLUDED == TRUE && GATTS_INCLUDED == TRUE
 
-#include "bt_trace.h"
-//#include "bt_utils.h"
+#include "common/bt_trace.h"
+#include "osi/allocator.h"
 
 //#include <stdio.h>
 #include <string.h>
 #include "gatt_int.h"
-#include "l2c_api.h"
+#include "stack/l2c_api.h"
 #include "btm_int.h"
 
 /********************************************************************************
@@ -45,7 +45,8 @@ static BOOLEAN copy_extra_byte_in_db(tGATT_SVC_DB *p_db, void **p_dst, UINT16 le
 
 static BOOLEAN gatts_db_add_service_declaration(tGATT_SVC_DB *p_db, tBT_UUID *p_service, BOOLEAN is_pri);
 static tGATT_STATUS gatts_send_app_read_request(tGATT_TCB *p_tcb, UINT8 op_code,
-        UINT16 handle, UINT16 offset, UINT32 trans_id);
+        UINT16 handle, UINT16 offset, UINT32 trans_id, BOOLEAN need_rsp);
+static BOOLEAN gatts_add_char_desc_value_check (tGATT_ATTR_VAL *attr_val, tGATTS_ATTR_CONTROL *control);
 
 /*******************************************************************************
 **
@@ -62,15 +63,17 @@ static tGATT_STATUS gatts_send_app_read_request(tGATT_TCB *p_tcb, UINT8 op_code,
 BOOLEAN gatts_init_service_db (tGATT_SVC_DB *p_db, tBT_UUID *p_service,  BOOLEAN is_pri,
                                UINT16 s_hdl, UINT16 num_handle)
 {
-    GKI_init_q(&p_db->svc_buffer);
+    if (p_db->svc_buffer == NULL) { //in case already alloc
+        p_db->svc_buffer = fixed_queue_new(QUEUE_SIZE_MAX);
+    }
 
     if (!allocate_svc_db_buf(p_db)) {
-        GATT_TRACE_ERROR("gatts_init_service_db failed, no resources");
+        GATT_TRACE_ERROR("gatts_init_service_db failed, no resources\n");
         return FALSE;
     }
 
-    GATT_TRACE_DEBUG("gatts_init_service_db");
-    GATT_TRACE_DEBUG("s_hdl = %d num_handle = %d", s_hdl, num_handle );
+    GATT_TRACE_DEBUG("gatts_init_service_db\n");
+    GATT_TRACE_DEBUG("s_hdl = %d num_handle = %d\n", s_hdl, num_handle );
 
     /* update service database information */
     p_db->next_handle   = s_hdl;
@@ -94,7 +97,7 @@ BOOLEAN gatts_init_service_db (tGATT_SVC_DB *p_db, tBT_UUID *p_service,  BOOLEAN
 tBT_UUID *gatts_get_service_uuid (tGATT_SVC_DB *p_db)
 {
     if (!p_db || !p_db->p_attr_list) {
-        GATT_TRACE_ERROR("service DB empty");
+        GATT_TRACE_ERROR("service DB empty\n");
 
         return NULL;
     } else {
@@ -127,28 +130,28 @@ static tGATT_STATUS gatts_check_attr_readability(tGATT_ATTR16 *p_attr,
     }
 
     if (!(perm & GATT_READ_ALLOWED)) {
-        GATT_TRACE_ERROR( "GATT_READ_NOT_PERMIT");
+        GATT_TRACE_ERROR( "GATT_READ_NOT_PERMIT\n");
         return GATT_READ_NOT_PERMIT;
     }
 
     if ((perm & GATT_READ_AUTH_REQUIRED ) && !(sec_flag & GATT_SEC_FLAG_LKEY_UNAUTHED) &&
             !(sec_flag & BTM_SEC_FLAG_ENCRYPTED)) {
-        GATT_TRACE_ERROR( "GATT_INSUF_AUTHENTICATION");
+        GATT_TRACE_ERROR( "GATT_INSUF_AUTHENTICATION\n");
         return GATT_INSUF_AUTHENTICATION;
     }
 
     if ((perm & GATT_READ_MITM_REQUIRED ) && !(sec_flag & GATT_SEC_FLAG_LKEY_AUTHED)) {
-        GATT_TRACE_ERROR( "GATT_INSUF_AUTHENTICATION: MITM Required");
+        GATT_TRACE_ERROR( "GATT_INSUF_AUTHENTICATION: MITM Required\n");
         return GATT_INSUF_AUTHENTICATION;
     }
 
     if ((perm & GATT_READ_ENCRYPTED_REQUIRED ) && !(sec_flag & GATT_SEC_FLAG_ENCRYPTED)) {
-        GATT_TRACE_ERROR( "GATT_INSUF_ENCRYPTION");
+        GATT_TRACE_ERROR( "GATT_INSUF_ENCRYPTION\n");
         return GATT_INSUF_ENCRYPTION;
     }
 
     if ( (perm & GATT_READ_ENCRYPTED_REQUIRED) && (sec_flag & GATT_SEC_FLAG_ENCRYPTED) && (key_size < min_key_size)) {
-        GATT_TRACE_ERROR( "GATT_INSUF_KEY_SIZE");
+        GATT_TRACE_ERROR( "GATT_INSUF_KEY_SIZE\n");
         return GATT_INSUF_KEY_SIZE;
     }
 
@@ -163,7 +166,7 @@ static tGATT_STATUS gatts_check_attr_readability(tGATT_ATTR16 *p_attr,
         case GATT_UUID_CHAR_CLIENT_CONFIG:
         case GATT_UUID_CHAR_SRVR_CONFIG:
         case GATT_UUID_CHAR_PRESENT_FORMAT:
-            GATT_TRACE_ERROR("GATT_NOT_LONG");
+            GATT_TRACE_ERROR("GATT_NOT_LONG\n");
             return GATT_NOT_LONG;
 
         default:
@@ -206,7 +209,7 @@ static tGATT_STATUS read_attr_value (void *p_attr,
     tGATT_STATUS    status;
     tGATT_ATTR16    *p_attr16  = (tGATT_ATTR16 *)p_attr;
 
-    GATT_TRACE_DEBUG("read_attr_value uuid=0x%04x perm=0x%0x sec_flag=0x%x offset=%d read_long=%d",
+    GATT_TRACE_DEBUG("read_attr_value uuid=0x%04x perm=0x%0x sec_flag=0x%x offset=%d read_long=%d\n",
                      p_attr16->uuid,
                      p_attr16->permission,
                      sec_flag,
@@ -268,7 +271,25 @@ static tGATT_STATUS read_attr_value (void *p_attr,
             status = GATT_SUCCESS;
         }
     } else { /* characteristic description or characteristic value */
-        status = GATT_PENDING;
+        if (p_attr16->control.auto_rsp == GATT_RSP_BY_STACK) {
+            if (p_attr16->p_value == NULL || p_attr16->p_value->attr_val.attr_val == NULL) {
+                status = GATT_UNKNOWN_ERROR;
+            }
+            else if (offset > p_attr16->p_value->attr_val.attr_len){
+			/*if offset equal to max_len, should respond with zero byte value
+            //if offset is greater than max_len, should respond with an error*/
+                status = GATT_INVALID_OFFSET;
+            } else { 
+                UINT8 *value = (UINT8 *)(p_attr16->p_value->attr_val.attr_val) + offset;
+                UINT16 len_left = p_attr16->p_value->attr_val.attr_len - offset;
+                len = (mtu >= len_left) ? (len_left) : mtu;
+                ARRAY_TO_STREAM(p, value, len);
+                status = GATT_STACK_RSP;
+            }
+
+        } else {
+            status = GATT_PENDING;
+        }
     }
 
     *p_len = len;
@@ -315,6 +336,8 @@ tGATT_STATUS gatts_db_read_attr_value_by_type (tGATT_TCB   *p_tcb,
 #if (defined(BLE_DELAY_REQUEST_ENC) && (BLE_DELAY_REQUEST_ENC == TRUE))
     UINT8       flag;
 #endif
+    BOOLEAN need_rsp;
+    BOOLEAN have_send_request = false;
 
     if (p_db && p_db->p_attr_list) {
         p_attr = (tGATT_ATTR16 *)p_db->p_attr_list;
@@ -340,13 +363,27 @@ tGATT_STATUS gatts_db_read_attr_value_by_type (tGATT_TCB   *p_tcb,
                 UINT16_TO_STREAM (p, p_attr->handle);
 
                 status = read_attr_value ((void *)p_attr, 0, &p, FALSE, (UINT16)(*p_len - 2), &len, sec_flag, key_size);
-
                 if (status == GATT_PENDING) {
-                    status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, 0, trans_id);
+
+
+                    need_rsp = TRUE;
+                    status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, 0, trans_id, need_rsp);
 
                     /* one callback at a time */
                     break;
-                } else if (status == GATT_SUCCESS) {
+                } else if (status == GATT_SUCCESS || status == GATT_STACK_RSP) {
+                    if (status == GATT_STACK_RSP){
+                        need_rsp = FALSE;
+                        status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, 0, trans_id, need_rsp);
+                        if(status == GATT_BUSY)
+                            break;
+
+                        if (!have_send_request){
+                            have_send_request = true;
+                            trans_id = p_tcb->sr_cmd.trans_id;
+                        }
+                    }
+
                     if (p_rsp->offset == 0) {
                         p_rsp->offset = len + 2;
                     }
@@ -413,6 +450,26 @@ UINT16 gatts_add_included_service (tGATT_SVC_DB *p_db, UINT16 s_handle, UINT16 e
         return 0;
     }
 
+    BOOLEAN is_include_service_allowed = TRUE;
+    // service declaration
+    tGATT_ATTR16 *first_attr = (tGATT_ATTR16 *)p_db->p_attr_list;
+    if (p_db->p_attr_list != NULL) {
+        tGATT_ATTR16 *next_attr = (tGATT_ATTR16 *)first_attr->p_next;
+        /* This service already has other attributes */
+        while (next_attr != NULL) {
+            if (!(next_attr->uuid_type == GATT_ATTR_UUID_TYPE_16 && next_attr->uuid == GATT_UUID_INCLUDE_SERVICE)) {
+                is_include_service_allowed = FALSE;
+                break;
+            }
+            next_attr = (tGATT_ATTR16 *)next_attr->p_next;
+        }
+
+    }
+    if (!is_include_service_allowed) {
+        GATT_TRACE_ERROR("%s error, The include service should be added before adding the characteristics", __func__);
+        return 0;
+    }
+
     if ((p_attr = (tGATT_ATTR16 *) allocate_attr_in_db(p_db, &uuid, GATT_PERM_READ)) != NULL) {
         if (copy_extra_byte_in_db(p_db, (void **)&p_attr->p_value, sizeof(tGATT_INCL_SRVC))) {
             p_attr->p_value->incl_handle.s_handle = s_handle;
@@ -445,12 +502,19 @@ UINT16 gatts_add_included_service (tGATT_SVC_DB *p_db, UINT16 s_handle, UINT16 e
 *******************************************************************************/
 UINT16 gatts_add_characteristic (tGATT_SVC_DB *p_db, tGATT_PERM perm,
                                  tGATT_CHAR_PROP property,
-                                 tBT_UUID *p_char_uuid)
+                                 tBT_UUID *p_char_uuid, tGATT_ATTR_VAL *attr_val, tGATTS_ATTR_CONTROL *control)
 {
     tGATT_ATTR16     *p_char_decl, *p_char_val;
     tBT_UUID        uuid = {LEN_UUID_16, {GATT_UUID_CHAR_DECLARE}};
+    BOOLEAN status;
 
-    GATT_TRACE_DEBUG("gatts_add_characteristic perm=0x%0x property=0x%0x", perm, property);
+    GATT_TRACE_DEBUG("gatts_add_characteristic perm=0x%0x property=0x%0x\n", perm, property);
+    /* parameter validation check */
+    status = gatts_add_char_desc_value_check(attr_val, control);
+    if (status == FALSE){
+        return 0;
+    }
+
 
     if ((p_char_decl = (tGATT_ATTR16 *)allocate_attr_in_db(p_db, &uuid, GATT_PERM_READ)) != NULL) {
         if (!copy_extra_byte_in_db(p_db, (void **)&p_char_decl->p_value, sizeof(tGATT_CHAR_DECL))) {
@@ -467,8 +531,44 @@ UINT16 gatts_add_characteristic (tGATT_SVC_DB *p_db, tGATT_PERM perm,
 
         p_char_decl->p_value->char_decl.property = property;
         p_char_decl->p_value->char_decl.char_val_handle  = p_char_val->handle;
+        if (control != NULL) {
+            p_char_val->control.auto_rsp  =  control->auto_rsp;
+        } else {
+            p_char_val->control.auto_rsp = GATT_RSP_DEFAULT;
+        }
 
-        p_char_val->p_value = NULL;
+        if (attr_val != NULL) {
+            if (!copy_extra_byte_in_db(p_db, (void **)&p_char_val->p_value, sizeof(tGATT_ATTR_VAL))) {
+                deallocate_attr_in_db(p_db, p_char_val);
+                return 0;
+            }
+            GATT_TRACE_DEBUG("attr_val->attr_len = %x, attr_val->attr_max_len = %x\n", attr_val->attr_len, attr_val->attr_max_len);
+            GATT_TRACE_DEBUG("attribute handle = %x\n", p_char_val->handle);
+            p_char_val->p_value->attr_val.attr_len = attr_val->attr_len;
+            p_char_val->p_value->attr_val.attr_max_len = attr_val->attr_max_len;
+            p_char_val->p_value->attr_val.attr_val = osi_malloc(attr_val->attr_max_len);
+            if (p_char_val->p_value->attr_val.attr_val == NULL) {
+               deallocate_attr_in_db(p_db, p_char_decl);
+               deallocate_attr_in_db(p_db, p_char_val);
+               GATT_TRACE_WARNING("Warning in %s, line=%d, insufficient resource to allocate for attribute value\n", __func__, __LINE__);
+               return 0;
+            }
+            else {
+                //add mask to indicate that p_value->attr_val.attr_val is dynamic allocated
+                p_char_val->mask |= GATT_ATTR_VALUE_ALLOCATED;
+            }
+            
+            //initiate characteristic attribute value part
+            memset(p_char_val->p_value->attr_val.attr_val, 0, attr_val->attr_max_len);
+            if (attr_val->attr_val != NULL) {
+                if (attr_val->attr_max_len < attr_val->attr_len){
+                    GATT_TRACE_ERROR("Error in %s, Line=%d, attribute actual length (%d) should not larger than max size (%d)\n",
+                                    __func__, __LINE__, attr_val->attr_len, attr_val->attr_max_len);
+                }
+                UINT16 actual_len = (attr_val->attr_max_len < attr_val->attr_len) ? (attr_val->attr_max_len) : (attr_val->attr_len);
+                memcpy(p_char_val->p_value->attr_val.attr_val, attr_val->attr_val, actual_len);
+            }
+        }
 
         return p_char_val->handle;
     }
@@ -542,22 +642,248 @@ UINT8 gatt_convertchar_descr_type(tBT_UUID *p_descr_uuid)
 **
 *******************************************************************************/
 UINT16 gatts_add_char_descr (tGATT_SVC_DB *p_db, tGATT_PERM perm,
-                             tBT_UUID      *p_descr_uuid)
+                             tBT_UUID  *p_descr_uuid,  tGATT_ATTR_VAL *attr_val, tGATTS_ATTR_CONTROL *control)
 {
     tGATT_ATTR16    *p_char_dscptr;
+    BOOLEAN status;
 
-    GATT_TRACE_DEBUG("gatts_add_char_descr uuid=0x%04x", p_descr_uuid->uu.uuid16);
+    GATT_TRACE_DEBUG("gatts_add_char_descr uuid=0x%04x\n", p_descr_uuid->uu.uuid16);
+
+    /* parameter validation check */
+    status = gatts_add_char_desc_value_check(attr_val, control);
+    if (status == FALSE){
+        return 0;
+    }
 
     /* Add characteristic descriptors */
-    if ((p_char_dscptr = (tGATT_ATTR16 *)allocate_attr_in_db(p_db,
-                         p_descr_uuid,
-                         perm))
-            == NULL) {
+    if ((p_char_dscptr = (tGATT_ATTR16 *)allocate_attr_in_db(p_db, p_descr_uuid, perm)) == NULL) {
+        deallocate_attr_in_db(p_db, p_char_dscptr);
         GATT_TRACE_DEBUG("gatts_add_char_descr Fail for adding char descriptors.");
         return 0;
     } else {
+        p_char_dscptr->control.auto_rsp = (control == NULL) ? GATT_RSP_DEFAULT : (control->auto_rsp);
+        if (attr_val != NULL) {
+            if (!copy_extra_byte_in_db(p_db, (void **)&p_char_dscptr->p_value, sizeof(tGATT_ATTR_VAL))) {
+                deallocate_attr_in_db(p_db, p_char_dscptr);
+                return 0;
+            }
+            p_char_dscptr->p_value->attr_val.attr_len = attr_val->attr_len;
+            p_char_dscptr->p_value->attr_val.attr_max_len  = attr_val->attr_max_len;
+            if (attr_val->attr_max_len != 0) {
+                p_char_dscptr->p_value->attr_val.attr_val = osi_malloc(attr_val->attr_max_len);
+                if (p_char_dscptr->p_value->attr_val.attr_val == NULL) {
+                    deallocate_attr_in_db(p_db, p_char_dscptr);
+                    GATT_TRACE_WARNING("Warning in %s, line=%d, insufficient resource to allocate for descriptor value\n", __func__, __LINE__);
+                    return 0;
+                }
+                else {
+                    //add mask to indicate that p_value->attr_val.attr_val is dynamic allocated
+                    p_char_dscptr->mask |= GATT_ATTR_VALUE_ALLOCATED;
+                }
+
+                //initiate characteristic attribute value part
+                memset(p_char_dscptr->p_value->attr_val.attr_val, 0, attr_val->attr_max_len);
+                if(attr_val->attr_val != NULL) {
+                    memcpy(p_char_dscptr->p_value->attr_val.attr_val, attr_val->attr_val, attr_val->attr_len);
+                }
+            }
+        }
         return p_char_dscptr->handle;
     }
+}
+
+
+/*******************************************************************************
+**
+** Function         gatts_set_attribute_value
+**
+** Description      This function add the attribute value in the database
+**
+** Parameter        p_db: database pointer.
+**                      attr_handle: the attribute handle
+**                      length: the attribute value length
+**                      value: the pointer to the data to be set to the attribute value in the database
+**
+** Returns          Status of the operation.
+**
+*******************************************************************************/
+tGATT_STATUS gatts_set_attribute_value(tGATT_SVC_DB *p_db, UINT16 attr_handle,
+                                               UINT16 length, UINT8 *value)
+{
+    tGATT_ATTR16  *p_cur;
+
+    if (p_db == NULL) {
+        GATT_TRACE_DEBUG("gatts_set_attribute_value Fail:p_db is NULL.\n");
+        return GATT_INVALID_PDU;
+    }
+    if (p_db->p_attr_list == NULL) {
+        GATT_TRACE_DEBUG("gatts_set_attribute_value Fail:p_db->p_attr_list is NULL.\n");
+        return GATT_INVALID_PDU;
+    }
+    if ((length > 0) && (value == NULL)){
+        GATT_TRACE_ERROR("Error in %s, line=%d, value should not be NULL here\n",__func__, __LINE__);
+        return GATT_INVALID_PDU;
+    }
+
+    p_cur    =  (tGATT_ATTR16 *) p_db->p_attr_list;
+
+    while (p_cur != NULL) {
+        if (p_cur->handle == attr_handle) {
+            /* for characteristic should not be set, return GATT_NOT_FOUND */
+            if (p_cur->uuid_type == GATT_ATTR_UUID_TYPE_16) {
+                switch (p_cur->uuid) {
+                    case GATT_UUID_PRI_SERVICE:
+                    case GATT_UUID_SEC_SERVICE:
+                    case GATT_UUID_CHAR_DECLARE:
+                        return GATT_NOT_FOUND;
+                        break;
+                }
+            }
+
+            /* in other cases, value can be set*/
+            if ((p_cur->p_value == NULL) || (p_cur->p_value->attr_val.attr_val == NULL) \
+                    || (p_cur->p_value->attr_val.attr_max_len == 0)){
+                GATT_TRACE_ERROR("Error in %s, line=%d, attribute value should not be NULL here\n", __func__, __LINE__);
+                return GATT_NOT_FOUND;
+            } else if (p_cur->p_value->attr_val.attr_max_len < length) {
+                GATT_TRACE_ERROR("gatts_set_attribute_value failed:Invalid value length");
+                return GATT_INVALID_ATTR_LEN;
+            } else{
+                memcpy(p_cur->p_value->attr_val.attr_val, value, length);
+                p_cur->p_value->attr_val.attr_len = length;
+            }
+            break;
+        }
+        p_cur = p_cur->p_next;
+    }
+
+    return GATT_SUCCESS;
+}
+
+/*******************************************************************************
+**
+** Function         gatts_get_attribute_value
+**
+** Description      This function get the attribute value in the database
+**
+** Parameter        p_db: database pointer.
+**                      attr_handle: the attribute handle
+**                      length: the attribute value length
+**                      value: the pointer to the data to be get to the attribute value in the database
+**
+** Returns          Status of the operation.
+**
+*******************************************************************************/
+tGATT_STATUS gatts_get_attribute_value(tGATT_SVC_DB *p_db, UINT16 attr_handle,
+                                       UINT16 *length, UINT8 **value)
+{
+    tGATT_ATTR16  *p_cur;
+
+    GATT_TRACE_DEBUG("attr_handle = %x\n", attr_handle);
+
+    if (p_db == NULL) {
+        GATT_TRACE_ERROR("gatts_get_attribute_value Fail:p_db is NULL.\n");
+        *length = 0;
+        return GATT_INVALID_PDU;
+    }
+    if (p_db->p_attr_list == NULL) {
+        GATT_TRACE_ERROR("gatts_get_attribute_value Fail:p_db->p_attr_list is NULL.\n");
+        *length = 0;
+        return GATT_INVALID_PDU;
+    }
+    if (length == NULL){
+        GATT_TRACE_ERROR("gatts_get_attribute_value Fail:length is NULL.\n");
+        return GATT_INVALID_PDU;
+    }
+    if (value == NULL){
+        GATT_TRACE_ERROR("gatts_get_attribute_value Fail:value is NULL.\n");
+        *length = 0;
+        return GATT_INVALID_PDU;
+    }
+
+    p_cur    =  (tGATT_ATTR16 *) p_db->p_attr_list;
+
+    while (p_cur != NULL) {
+        if (p_cur->handle == attr_handle) {
+
+            if (p_cur->uuid_type == GATT_ATTR_UUID_TYPE_16) {
+                switch (p_cur->uuid) {
+                case GATT_UUID_CHAR_DECLARE:
+                case GATT_UUID_INCLUDE_SERVICE:
+                    break;
+                default:
+                    if (p_cur->p_value &&  p_cur->p_value->attr_val.attr_len != 0) {
+                        *length = p_cur->p_value->attr_val.attr_len;
+                        *value = p_cur->p_value->attr_val.attr_val;
+                        return GATT_SUCCESS;
+                    } else {
+                        *length = 0;
+                        return GATT_SUCCESS;
+                    }
+                    break;
+                }
+            } else {
+                if (p_cur->p_value && p_cur->p_value->attr_val.attr_len != 0) {
+                    *length = p_cur->p_value->attr_val.attr_len;
+                    *value = p_cur->p_value->attr_val.attr_val;
+                    return GATT_SUCCESS;
+                } else {
+                    *length = 0;
+                    return GATT_SUCCESS;
+                }
+
+            }
+
+            break;
+
+        }
+
+        p_cur = p_cur->p_next;
+    }
+
+    return GATT_NOT_FOUND;
+}
+
+BOOLEAN gatts_is_auto_response(UINT16 attr_handle)
+{
+    tGATT_HDL_LIST_ELEM  *p_decl = NULL;
+    BOOLEAN rsp = FALSE;
+    tGATT_SVC_DB *p_db = NULL;
+    if ((p_decl = gatt_find_hdl_buffer_by_attr_handle(attr_handle)) == NULL) {
+        GATT_TRACE_DEBUG("Service not created\n");
+        return rsp;
+    }
+
+    p_db = &p_decl->svc_db;
+
+    tGATT_ATTR16  *p_cur, *p_next;
+
+    if (p_db == NULL) {
+        GATT_TRACE_DEBUG("gatts_get_attribute_value Fail:p_db is NULL.\n");
+        return rsp;
+    }
+    if (p_db->p_attr_list == NULL) {
+        GATT_TRACE_DEBUG("gatts_get_attribute_value Fail:p_db->p_attr_list is NULL.\n");
+        return rsp;
+    }
+
+    p_cur    =  (tGATT_ATTR16 *) p_db->p_attr_list;
+    p_next  = (tGATT_ATTR16 *) p_cur->p_next;
+
+    for (; p_cur != NULL && p_next != NULL;
+            p_cur = p_next, p_next = (tGATT_ATTR16 *)p_next->p_next) {
+        if (p_cur->handle == attr_handle) {
+            if (p_cur->p_value != NULL && p_cur->control.auto_rsp == GATT_RSP_BY_STACK) {
+                rsp = true;
+                return rsp;
+            }
+
+        }
+
+    }
+
+    return rsp;
+
 }
 
 /*******************************************************************************/
@@ -605,12 +931,54 @@ tGATT_STATUS gatts_read_attr_value_by_handle(tGATT_TCB *p_tcb,
                                           (BOOLEAN)(op_code == GATT_REQ_READ_BLOB),
                                           mtu, p_len, sec_flag, key_size);
 
-                if (status == GATT_PENDING) {
-                    status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, offset, trans_id);
+                if ((status == GATT_PENDING) || (status == GATT_STACK_RSP)) {
+                    BOOLEAN need_rsp = (status != GATT_STACK_RSP);
+                    status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, offset, trans_id, need_rsp);
                 }
                 break;
             }
             p_attr = (tGATT_ATTR16 *)p_attr->p_next;
+        }
+    }
+
+
+    return status;
+}
+
+tGATT_STATUS gatts_write_attr_value_by_handle(tGATT_SVC_DB *p_db,
+        UINT16 handle, UINT16 offset,
+        UINT8 *p_value, UINT16 len)
+{
+    tGATT_STATUS status = GATT_NOT_FOUND;
+    tGATT_ATTR16  *p_attr;
+
+    if (p_db && p_db->p_attr_list) {
+        p_attr = (tGATT_ATTR16 *)p_db->p_attr_list;
+
+        while (p_attr && handle >= p_attr->handle) {
+            if (p_attr->handle == handle ) {
+                if (p_attr->control.auto_rsp == GATT_RSP_BY_APP) {
+                    return GATT_APP_RSP;
+                }
+
+                if ((p_attr->p_value != NULL) && 
+                    (p_attr->p_value->attr_val.attr_max_len >= offset + len) && 
+                    p_attr->p_value->attr_val.attr_val != NULL) {
+                    memcpy(p_attr->p_value->attr_val.attr_val + offset, p_value, len);
+                    p_attr->p_value->attr_val.attr_len = len + offset;
+                    return GATT_SUCCESS;
+                } else if (p_attr->p_value->attr_val.attr_max_len < offset + len){
+                    GATT_TRACE_DEBUG("Remote device try to write with a length larger then attribute's max length\n");
+                    return GATT_INVALID_ATTR_LEN;               
+                } else if ((p_attr->p_value == NULL) || (p_attr->p_value->attr_val.attr_val == NULL)){
+                    GATT_TRACE_ERROR("Error in %s, line=%d, %s should not be NULL here\n", __func__, __LINE__, \
+                                    (p_attr->p_value == NULL) ? "p_value" : "attr_val.attr_val");
+                    return GATT_UNKNOWN_ERROR;
+                }
+            }
+
+            p_attr = (tGATT_ATTR16 *)p_attr->p_next;
+
         }
     }
 
@@ -661,6 +1029,8 @@ tGATT_STATUS gatts_read_attr_perm_check(tGATT_SVC_DB *p_db,
 
     return status;
 }
+
+
 /*******************************************************************************
 **
 ** Function         gatts_write_attr_perm_check
@@ -835,7 +1205,7 @@ static void *allocate_attr_in_db(tGATT_SVC_DB *p_db, tBT_UUID *p_uuid, tGATT_PER
     UINT16      len = sizeof(tGATT_ATTR128);
 
     if (p_uuid == NULL) {
-        GATT_TRACE_ERROR("illegal UUID");
+        GATT_TRACE_ERROR("illegal UUID\n");
         return NULL;
     }
 
@@ -845,17 +1215,17 @@ static void *allocate_attr_in_db(tGATT_SVC_DB *p_db, tBT_UUID *p_uuid, tGATT_PER
         len = sizeof(tGATT_ATTR32);
     }
 
-    GATT_TRACE_DEBUG("allocate attr %d bytes ", len);
+    GATT_TRACE_DEBUG("allocate attr %d bytes\n", len);
 
     if (p_db->end_handle <= p_db->next_handle) {
-        GATT_TRACE_DEBUG("handle space full. handle_max = %d next_handle = %d",
+        GATT_TRACE_DEBUG("handle space full. handle_max = %d next_handle = %d\n",
                          p_db->end_handle, p_db->next_handle);
         return NULL;
     }
 
     if (p_db->mem_free < len) {
         if (!allocate_svc_db_buf(p_db)) {
-            GATT_TRACE_ERROR("allocate_attr_in_db failed, no resources");
+            GATT_TRACE_ERROR("allocate_attr_in_db failed, no resources\n");
             return NULL;
         }
     }
@@ -896,18 +1266,20 @@ static void *allocate_attr_in_db(tGATT_SVC_DB *p_db, tBT_UUID *p_uuid, tGATT_PER
     }
 
     if (p_attr16->uuid_type == GATT_ATTR_UUID_TYPE_16) {
-        GATT_TRACE_DEBUG("=====> handle = [0x%04x] uuid16 = [0x%04x] perm=0x%02x ",
+        GATT_TRACE_DEBUG("=====> handle = [0x%04x] uuid16 = [0x%04x] perm=0x%02x\n",
                          p_attr16->handle, p_attr16->uuid, p_attr16->permission);
     } else if (p_attr16->uuid_type == GATT_ATTR_UUID_TYPE_32) {
-        GATT_TRACE_DEBUG("=====> handle = [0x%04x] uuid32 = [0x%08x] perm=0x%02x ",
+        GATT_TRACE_DEBUG("=====> handle = [0x%04x] uuid32 = [0x%08x] perm=0x%02x\n",
                          p_attr32->handle, p_attr32->uuid, p_attr32->permission);
     } else {
-        GATT_TRACE_DEBUG("=====> handle = [0x%04x] uuid128 = [0x%02x:0x%02x] perm=0x%02x ",
+        GATT_TRACE_DEBUG("=====> handle = [0x%04x] uuid128 = [0x%02x:0x%02x] perm=0x%02x\n",
                          p_attr128->handle, p_attr128->uuid[0], p_attr128->uuid[1],
                          p_attr128->permission);
     }
     return (void *)p_attr16;
 }
+
+
 
 /*******************************************************************************
 **
@@ -974,7 +1346,7 @@ static BOOLEAN copy_extra_byte_in_db(tGATT_SVC_DB *p_db, void **p_dst, UINT16 le
 
     if (p_db->mem_free < len) {
         if (!allocate_svc_db_buf(p_db)) {
-            GATT_TRACE_ERROR("copy_extra_byte_in_db failed, no resources");
+            GATT_TRACE_ERROR("copy_extra_byte_in_db failed, no resources\n");
             return FALSE;
         }
     }
@@ -1003,16 +1375,15 @@ static BOOLEAN allocate_svc_db_buf(tGATT_SVC_DB *p_db)
 
     GATT_TRACE_DEBUG("allocate_svc_db_buf allocating extra buffer");
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf(GATT_DB_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_calloc(GATT_DB_BUF_SIZE)) == NULL) {
         GATT_TRACE_ERROR("allocate_svc_db_buf failed, no resources");
         return FALSE;
     }
 
-    memset(p_buf, 0, GKI_get_buf_size(p_buf));
     p_db->p_free_mem    = (UINT8 *) p_buf;
-    p_db->mem_free      = GKI_get_buf_size(p_buf);
+    p_db->mem_free = GATT_DB_BUF_SIZE;
 
-    GKI_enqueue(&p_db->svc_buffer, p_buf);
+    fixed_queue_enqueue(p_db->svc_buffer, p_buf);
 
     return TRUE;
 
@@ -1028,7 +1399,7 @@ static BOOLEAN allocate_svc_db_buf(tGATT_SVC_DB *p_db)
 **
 *******************************************************************************/
 static tGATT_STATUS gatts_send_app_read_request(tGATT_TCB *p_tcb, UINT8 op_code,
-        UINT16 handle, UINT16 offset, UINT32 trans_id)
+        UINT16 handle, UINT16 offset, UINT32 trans_id, BOOLEAN need_rsp)
 {
     tGATTS_DATA   sr_data;
     UINT8       i_rcb;
@@ -1050,10 +1421,17 @@ static tGATT_STATUS gatts_send_app_read_request(tGATT_TCB *p_tcb, UINT8 op_code,
         sr_data.read_req.handle = handle;
         sr_data.read_req.is_long = (BOOLEAN)(op_code == GATT_REQ_READ_BLOB);
         sr_data.read_req.offset = offset;
+        sr_data.read_req.need_rsp = need_rsp;
 
         gatt_sr_send_req_callback(conn_id,
                                   trans_id, GATTS_REQ_TYPE_READ, &sr_data);
-        return (tGATT_STATUS) GATT_PENDING;
+        
+        if (need_rsp) {
+            return (tGATT_STATUS) GATT_PENDING;
+        }
+        else{
+            return (tGATT_STATUS) GATT_STACK_RSP;
+        }
     } else {
         return (tGATT_STATUS) GATT_BUSY;    /* max pending command, application error */
     }
@@ -1106,4 +1484,47 @@ static BOOLEAN gatts_db_add_service_declaration(tGATT_SVC_DB *p_db, tBT_UUID *p_
     return rt;
 }
 
-#endif /* BLE_INCLUDED */
+/*******************************************************************************
+**
+** Function         gatts_add_char_desc_value_check
+**
+** Description      parameters validation check for gatts add char/descriptor functions
+**
+** Parameter        attr_val: attribute value for char/descriptor.
+**                  control: control variable for char/descriptor.
+**
+** Returns          void
+**
+*******************************************************************************/
+static BOOLEAN gatts_add_char_desc_value_check (tGATT_ATTR_VAL *attr_val, tGATTS_ATTR_CONTROL *control)
+{
+    if ((control != NULL) && ((control->auto_rsp != GATT_RSP_BY_APP) && (control->auto_rsp != GATT_RSP_BY_STACK))){
+            GATT_TRACE_ERROR("Error in %s, line=%d, control->auto_rsp should be set to GATT_RSP_BY_APP or GATT_RSP_BY_STACK here\n",\
+                    __func__, __LINE__);
+            return FALSE;
+    }
+
+    if ((control != NULL) && (control->auto_rsp == GATT_RSP_BY_STACK)){
+        if (attr_val == NULL){
+            GATT_TRACE_ERROR("Error in %s, line=%d, for stack respond attribute, attr_val should not be NULL here\n",\
+                            __func__, __LINE__);
+            return FALSE;
+        } else if (attr_val->attr_max_len == 0){
+            GATT_TRACE_ERROR("Error in %s, line=%d, for stack respond attribute,  attribute max length should not be 0\n",\
+                            __func__, __LINE__);
+            return FALSE;
+        }
+    }
+
+    if (attr_val != NULL){
+        if (attr_val->attr_len > attr_val->attr_max_len){
+            GATT_TRACE_ERROR("Error in %s, line=%d,attribute actual length should not be larger than max length\n",\
+                            __func__, __LINE__);
+            return FALSE;
+        }
+    }
+
+    return TRUE ;
+}
+
+#endif /* BLE_INCLUDED == TRUE && GATTS_INCLUDED == TRUE */

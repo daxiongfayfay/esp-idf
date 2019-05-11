@@ -22,7 +22,7 @@
 #include <sys/signal.h>
 #include <sys/unistd.h>
 #include <sys/reent.h>
-#include "rom/libc_stubs.h"
+#include "esp32/rom/libc_stubs.h"
 #include "esp_vfs.h"
 #include "esp_newlib.h"
 #include "sdkconfig.h"
@@ -32,7 +32,7 @@ static struct _reent s_reent;
 extern int _printf_float(struct _reent *rptr,
                void *pdata,
                FILE * fp,
-               int (*pfunc) (struct _reent *, FILE *, _CONST char *, size_t len),
+               int (*pfunc) (struct _reent *, FILE *, const char *, size_t len),
                va_list * ap);
 
 
@@ -41,6 +41,10 @@ extern int _scanf_float(struct _reent *rptr,
               FILE *fp,
               va_list *ap);
 
+static void raise_r_stub(struct _reent *rptr)
+{
+    _raise_r(rptr, 0);
+}
 
 static struct syscall_stub_table s_stub_table = {
     .__getreent = &__getreent,
@@ -53,7 +57,7 @@ static struct syscall_stub_table s_stub_table = {
     ._rename_r = &esp_vfs_rename,
     ._times_r = &_times_r,
     ._gettimeofday_r = &_gettimeofday_r,
-    ._raise_r = (void (*)(struct _reent *r)) &_raise_r,
+    ._raise_r = &raise_r_stub,
     ._unlink_r = &esp_vfs_unlink,
     ._link_r = &esp_vfs_link,
     ._stat_r = &esp_vfs_stat,
@@ -70,7 +74,7 @@ static struct syscall_stub_table s_stub_table = {
     ._lock_init = &_lock_init,
     ._lock_init_recursive = &_lock_init_recursive,
     ._lock_close = &_lock_close,
-    ._lock_close_recursive = &_lock_close,
+    ._lock_close_recursive = &_lock_close_recursive,
     ._lock_acquire = &_lock_acquire,
     ._lock_acquire_recursive = &_lock_acquire_recursive,
     ._lock_try_acquire = &_lock_try_acquire,

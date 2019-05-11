@@ -18,15 +18,15 @@
 #include <string.h>
 //#include <stdio.h>
 #include <stddef.h>
-#include "bt_target.h"
+#include "common/bt_target.h"
 
-#include "btm_ble_api.h"
-#include "bt_types.h"
+#include "stack/btm_ble_api.h"
+#include "stack/bt_types.h"
 //#include "bt_utils.h"
-#include "btu.h"
+#include "stack/btu.h"
 #include "btm_int.h"
-#include "controller.h"
-#include "hcimsgs.h"
+#include "device/controller.h"
+#include "stack/hcimsgs.h"
 
 #if (BLE_INCLUDED == TRUE)
 
@@ -96,13 +96,13 @@ void btm_ble_batchscan_filter_track_adv_vse_cback(UINT8 len, UINT8 *p)
 
                 STREAM_TO_UINT8(adv_data.adv_pkt_len, p);
                 if (adv_data.adv_pkt_len > 0) {
-                    adv_data.p_adv_pkt_data = GKI_getbuf(adv_data.adv_pkt_len);
+                    adv_data.p_adv_pkt_data = osi_malloc(adv_data.adv_pkt_len);
                     memcpy(adv_data.p_adv_pkt_data, p, adv_data.adv_pkt_len);
                 }
 
                 STREAM_TO_UINT8(adv_data.scan_rsp_len, p);
                 if (adv_data.scan_rsp_len > 0) {
-                    adv_data.p_scan_rsp_data = GKI_getbuf(adv_data.scan_rsp_len);
+                    adv_data.p_scan_rsp_data = osi_malloc(adv_data.scan_rsp_len);
                     memcpy(adv_data.p_scan_rsp_data, p, adv_data.scan_rsp_len);
                 }
             }
@@ -205,15 +205,15 @@ void btm_ble_batchscan_enq_rep_data(UINT8 report_format, UINT8 num_records, UINT
         len = ble_batchscan_cb.main_rep_q.data_len[index];
         p_orig_data = ble_batchscan_cb.main_rep_q.p_data[index];
         if (NULL != p_orig_data) {
-            p_app_data = GKI_getbuf(len + data_len);
+            p_app_data = osi_malloc(len + data_len);
             memcpy(p_app_data, p_orig_data, len);
             memcpy(p_app_data + len, p_data, data_len);
-            GKI_freebuf(p_orig_data);
+            osi_free(p_orig_data);
             ble_batchscan_cb.main_rep_q.p_data[index] = p_app_data;
             ble_batchscan_cb.main_rep_q.num_records[index] += num_records;
             ble_batchscan_cb.main_rep_q.data_len[index] += data_len;
         } else {
-            p_app_data = GKI_getbuf(data_len);
+            p_app_data = osi_malloc(data_len);
             memcpy(p_app_data, p_data, data_len);
             ble_batchscan_cb.main_rep_q.p_data[index] = p_app_data;
             ble_batchscan_cb.main_rep_q.num_records[index] = num_records;
@@ -427,9 +427,10 @@ void btm_ble_batchscan_vsc_cmpl_cback (tBTM_VSC_CMPL *p_params)
             if (0 == num_records) {
                 btm_ble_batchscan_deq_rep_data(report_format, &ref_value, &num_records,
                                                &p_data, &data_len);
-                if (NULL != ble_batchscan_cb.p_scan_rep_cback)
+                if (NULL != ble_batchscan_cb.p_scan_rep_cback) {
                     ble_batchscan_cb.p_scan_rep_cback(ref_value, report_format, num_records,
                                                       data_len, p_data, status);
+                }
             } else {
                 if ((len - 4) > 0) {
                     btm_ble_batchscan_enq_rep_data(report_format, num_records, p, len - 4);
@@ -439,9 +440,10 @@ void btm_ble_batchscan_vsc_cmpl_cback (tBTM_VSC_CMPL *p_params)
                         btm_ble_batchscan_deq_rep_data(report_format, &ref_value, &num_records,
                                                        &p_data, &data_len);
                         /* Send whatever is available, in case of a command failure */
-                        if (NULL != ble_batchscan_cb.p_scan_rep_cback && NULL != p_data)
+                        if (NULL != ble_batchscan_cb.p_scan_rep_cback && NULL != p_data) {
                             ble_batchscan_cb.p_scan_rep_cback(ref_value, report_format,
                                                               num_records, data_len, p_data, status);
+                        }
                     }
                 }
             }
@@ -918,9 +920,9 @@ void btm_ble_batchscan_cleanup(void)
 
     for (index = 0; index < BTM_BLE_BATCH_REP_MAIN_Q_SIZE; index++) {
         if (NULL != ble_batchscan_cb.main_rep_q.p_data[index]) {
-            GKI_freebuf(ble_batchscan_cb.main_rep_q.p_data[index]);
+            osi_free(ble_batchscan_cb.main_rep_q.p_data[index]);
+            ble_batchscan_cb.main_rep_q.p_data[index] = NULL;
         }
-        ble_batchscan_cb.main_rep_q.p_data[index] = NULL;
     }
 
     memset(&ble_batchscan_cb, 0, sizeof(tBTM_BLE_BATCH_SCAN_CB));

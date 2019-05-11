@@ -22,16 +22,16 @@
  *
  ******************************************************************************/
 #include <string.h>
-#include "bt_target.h"
+#include "common/bt_target.h"
 
 #if (BLE_INCLUDED == TRUE && BLE_PRIVACY_SPT == TRUE)
-#include "bt_types.h"
-#include "hcimsgs.h"
-#include "btu.h"
+#include "stack/bt_types.h"
+#include "stack/hcimsgs.h"
+#include "stack/btu.h"
 //#include "vendor_hcidefs.h"
 #include "btm_int.h"
-#include "controller.h"
-#include "hcidefs.h"
+#include "device/controller.h"
+#include "stack/hcidefs.h"
 
 #define HCI_VENDOR_BLE_RPA_VSC          (0x0155 | HCI_GRP_VENDOR_SPECIFIC)
 
@@ -521,9 +521,10 @@ tBTM_STATUS btm_ble_read_resolving_list_entry(tBTM_SEC_DEV_REC *p_dev_rec)
                                         btm_ble_resolving_list_vsc_op_cmpl);
     }
 
-    if (st == BTM_CMD_STARTED)
+    if (st == BTM_CMD_STARTED) {
         btm_ble_enq_resolving_list_pending(p_dev_rec->bd_addr,
                                            BTM_BLE_META_READ_IRK_ENTRY);
+    }
 
     return st;
 }
@@ -733,6 +734,7 @@ BOOLEAN btm_ble_disable_resolving_list(UINT8 rl_mask, BOOLEAN to_resume )
 BOOLEAN btm_ble_resolving_list_load_dev(tBTM_SEC_DEV_REC *p_dev_rec)
 {
     BOOLEAN rt = FALSE;
+#if (SMP_INCLUDED == TRUE)
     UINT8 rl_mask = btm_cb.ble_ctr_cb.rl_state;
 
     BTM_TRACE_DEBUG("%s btm_cb.ble_ctr_cb.privacy_mode = %d\n", __func__,
@@ -764,18 +766,22 @@ BOOLEAN btm_ble_resolving_list_load_dev(tBTM_SEC_DEV_REC *p_dev_rec)
                 btm_ble_update_resolving_list(p_dev_rec->bd_addr, TRUE);
                 if (controller_get_interface()->supports_ble_privacy()) {
                     BD_ADDR dummy_bda = {0};
-                    UINT8 *peer_irk = p_dev_rec->ble.keys.irk;
-                    UINT8 *local_irk = btm_cb.devcb.id_keys.irk;
-
                     if (memcmp(p_dev_rec->ble.static_addr, dummy_bda, BD_ADDR_LEN) == 0) {
                         memcpy(p_dev_rec->ble.static_addr, p_dev_rec->bd_addr, BD_ADDR_LEN);
                         p_dev_rec->ble.static_addr_type = p_dev_rec->ble.ble_addr_type;
                     }
-
+                    /* It will cause that scanner doesn't send scan request to advertiser
+                     * which has sent IRK to us and we have stored the IRK in controller.
+                     * It is a hardware limitation. The preliminary solution is not to
+                     * send key to the controller, but to resolve the random address in host. */
+                    /*
                     BTM_TRACE_DEBUG("%s:adding device to controller resolving list\n", __func__);
-                    // use identical IRK for now
+                    UINT8 *peer_irk = p_dev_rec->ble.keys.irk;
+                    UINT8 *local_irk = btm_cb.devcb.id_keys.irk;
+                    //use identical IRK for now
                     rt = btsnd_hcic_ble_add_device_resolving_list(p_dev_rec->ble.static_addr_type,
-                            p_dev_rec->ble.static_addr, peer_irk, local_irk);
+                           p_dev_rec->ble.static_addr, peer_irk, local_irk);
+                    */
                 } else {
                     UINT8 param[40] = {0};
                     UINT8 *p = param;
@@ -794,9 +800,10 @@ BOOLEAN btm_ble_resolving_list_load_dev(tBTM_SEC_DEV_REC *p_dev_rec)
                     }
                 }
 
-                if (rt)
+                if (rt) {
                     btm_ble_enq_resolving_list_pending(p_dev_rec->bd_addr,
                                                        BTM_BLE_META_ADD_IRK_ENTRY);
+                }
 
                 /* if resolving list has been turned on, re-enable it */
                 if (rl_mask) {
@@ -806,12 +813,13 @@ BOOLEAN btm_ble_resolving_list_load_dev(tBTM_SEC_DEV_REC *p_dev_rec)
                 }
             }
         } else {
-            BTM_TRACE_ERROR("Device already in Resolving list\n");
+            BTM_TRACE_DEBUG("Device already in Resolving list\n");
             rt = TRUE;
         }
     } else {
         BTM_TRACE_DEBUG("Device not a RPA enabled device\n");
     }
+#endif  ///SMP_INCLUDED == TRUE
     return rt;
 }
 
@@ -946,12 +954,12 @@ void btm_ble_resolving_list_init(UINT8 max_irk_list_sz)
                            (max_irk_list_sz / 8 + 1) : (max_irk_list_sz / 8);
 
     if (max_irk_list_sz > 0) {
-        p_q->resolve_q_random_pseudo = (BD_ADDR *)GKI_getbuf(sizeof(BD_ADDR) * max_irk_list_sz);
-        p_q->resolve_q_action = (UINT8 *)GKI_getbuf(max_irk_list_sz);
+        p_q->resolve_q_random_pseudo = (BD_ADDR *)osi_malloc(sizeof(BD_ADDR) * max_irk_list_sz);
+        p_q->resolve_q_action = (UINT8 *)osi_malloc(max_irk_list_sz);
 
         /* RPA offloading feature */
         if (btm_cb.ble_ctr_cb.irk_list_mask == NULL) {
-            btm_cb.ble_ctr_cb.irk_list_mask = (UINT8 *)GKI_getbuf(irk_mask_size);
+            btm_cb.ble_ctr_cb.irk_list_mask = (UINT8 *)osi_malloc(irk_mask_size);
         }
 
         BTM_TRACE_DEBUG ("%s max_irk_list_sz = %d", __func__, max_irk_list_sz);
@@ -978,18 +986,20 @@ void btm_ble_resolving_list_cleanup(void)
     tBTM_BLE_RESOLVE_Q *p_q = &btm_cb.ble_ctr_cb.resolving_list_pend_q;
 
     if (p_q->resolve_q_random_pseudo) {
-        GKI_freebuf(p_q->resolve_q_random_pseudo);
+        osi_free(p_q->resolve_q_random_pseudo);
+        p_q->resolve_q_random_pseudo = NULL;
     }
 
     if (p_q->resolve_q_action) {
-        GKI_freebuf(p_q->resolve_q_action);
+        osi_free(p_q->resolve_q_action);
+        p_q->resolve_q_action = NULL;
     }
 
     controller_get_interface()->set_ble_resolving_list_max_size(0);
     if (btm_cb.ble_ctr_cb.irk_list_mask) {
-        GKI_freebuf(btm_cb.ble_ctr_cb.irk_list_mask);
+        osi_free(btm_cb.ble_ctr_cb.irk_list_mask);
+        btm_cb.ble_ctr_cb.irk_list_mask = NULL;
     }
 
-    btm_cb.ble_ctr_cb.irk_list_mask = NULL;
 }
 #endif

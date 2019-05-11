@@ -22,13 +22,12 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
-#if BLE_INCLUDED == TRUE
+#if BLE_INCLUDED == TRUE && GATTC_INCLUDED == TRUE
 
 #include <string.h>
-//#include "bt_utils.h"
-#include "gki.h"
+#include "osi/allocator.h"
 #include "gatt_int.h"
 #include "l2c_int.h"
 
@@ -554,6 +553,9 @@ void gatt_process_error_rsp(tGATT_TCB *p_tcb, tGATT_CLCB *p_clcb, UINT8 op_code,
                 (opcode == GATT_REQ_PREPARE_WRITE) &&
                 (p_attr) &&
                 (handle == p_attr->handle)  ) {
+            if (reason == GATT_SUCCESS){
+               reason = GATT_ERROR;
+            }
             p_clcb->status = reason;
             gatt_send_queue_write_cancel(p_tcb, p_clcb, GATT_PREP_WRITE_CANCEL);
         } else if ((p_clcb->operation == GATTC_OPTYPE_READ) &&
@@ -584,7 +586,7 @@ void gatt_process_prep_write_rsp (tGATT_TCB *p_tcb, tGATT_CLCB *p_clcb, UINT8 op
     tGATT_VALUE  value = {0};
     UINT8        *p = p_data;
 
-    GATT_TRACE_ERROR("value resp op_code = %s len = %d", gatt_dbg_op_name(op_code), len);
+    GATT_TRACE_DEBUG("value resp op_code = %s len = %d", gatt_dbg_op_name(op_code), len);
 
     if (len < GATT_PREP_WRITE_RSP_MIN_LEN) {
         GATT_TRACE_ERROR("illegal prepare write response length, discard");
@@ -809,7 +811,7 @@ void gatt_process_read_by_type_rsp (tGATT_TCB *p_tcb, tGATT_CLCB *p_clcb, UINT8 
             if ( p_clcb->counter == (p_clcb->p_tcb->payload_size - 4)) {
                 p_clcb->op_subtype = GATT_READ_BY_HANDLE;
                 if (!p_clcb->p_attr_buf) {
-                    p_clcb->p_attr_buf = (UINT8 *)GKI_getbuf(GATT_MAX_ATTR_LEN);
+                    p_clcb->p_attr_buf = (UINT8 *)osi_malloc(GATT_MAX_ATTR_LEN);
                 }
                 if (p_clcb->p_attr_buf && p_clcb->counter <= GATT_MAX_ATTR_LEN) {
                     memcpy(p_clcb->p_attr_buf, p, p_clcb->counter);
@@ -896,7 +898,7 @@ void gatt_process_read_rsp(tGATT_TCB *p_tcb, tGATT_CLCB *p_clcb,  UINT8 op_code,
 
             /* allocate GKI buffer holding up long attribute value  */
             if (!p_clcb->p_attr_buf) {
-                p_clcb->p_attr_buf = (UINT8 *)GKI_getbuf(GATT_MAX_ATTR_LEN);
+                p_clcb->p_attr_buf = (UINT8 *)osi_malloc(GATT_MAX_ATTR_LEN);
             }
 
             /* copy attrobute value into cb buffer  */
@@ -986,8 +988,10 @@ void gatt_process_mtu_rsp(tGATT_TCB *p_tcb, tGATT_CLCB *p_clcb, UINT16 len, UINT
             p_tcb->payload_size = mtu;
         }
     }
-
-    l2cble_set_fixed_channel_tx_data_length(p_tcb->peer_bda, L2CAP_ATT_CID, p_tcb->payload_size);
+    /* host will set packet data length to 251 automatically if remote device support set packet data length,
+       so l2cble_set_fixed_channel_tx_data_length() is not necessary.
+       l2cble_set_fixed_channel_tx_data_length(p_tcb->peer_bda, L2CAP_ATT_CID, p_tcb->payload_size);
+    */
     gatt_end_operation(p_clcb, status, NULL);
 }
 /*******************************************************************************
@@ -1034,7 +1038,10 @@ BOOLEAN gatt_cl_send_next_cmd_inq(tGATT_TCB *p_tcb)
         if (att_ret == GATT_SUCCESS || att_ret == GATT_CONGESTED) {
             sent = TRUE;
             p_cmd->to_send = FALSE;
-            p_cmd->p_cmd = NULL;
+            if(p_cmd->p_cmd) {
+                osi_free(p_cmd->p_cmd);
+                p_cmd->p_cmd = NULL;
+            }
 
             /* dequeue the request if is write command or sign write */
             if (p_cmd->op_code != GATT_CMD_WRITE && p_cmd->op_code != GATT_SIGN_CMD_WRITE) {
@@ -1162,4 +1169,4 @@ void gatt_client_handle_server_rsp (tGATT_TCB *p_tcb, UINT8 op_code,
     return;
 }
 
-#endif  /* BLE_INCLUDED */
+#endif  /* BLE_INCLUDED == TRUE && GATTC_INCLUDED == TRUE */

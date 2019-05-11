@@ -26,16 +26,17 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "bt_target.h"
-#include "gki.h"
-#include "hcidefs.h"
-#include "hcimsgs.h"
-#include "l2cdefs.h"
+#include "common/bt_target.h"
+#include "stack/hcidefs.h"
+#include "stack/hcimsgs.h"
+#include "stack/l2cdefs.h"
 #include "l2c_int.h"
 #include "btm_int.h"
-#include "btu.h"
-#include "hcimsgs.h"
+#include "stack/btu.h"
+#include "stack/hcimsgs.h"
+#include "osi/allocator.h"
 
+#if (CLASSIC_BT_INCLUDED == TRUE)
 /********************************************************************************/
 /*              L O C A L    F U N C T I O N     P R O T O T Y P E S            */
 /********************************************************************************/
@@ -260,7 +261,7 @@ static void l2c_csm_closed (tL2C_CCB *p_ccb, UINT16 event, void *p_data)
 
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
 
     case L2CEVT_L2CA_DISCONNECT_REQ:                 /* Upper wants to disconnect */
@@ -345,7 +346,7 @@ static void l2c_csm_orig_w4_sec_comp (tL2C_CCB *p_ccb, UINT16 event, void *p_dat
 
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
 
     case L2CEVT_L2CA_DISCONNECT_REQ:                 /* Upper wants to disconnect */
@@ -432,7 +433,7 @@ static void l2c_csm_term_w4_sec_comp (tL2C_CCB *p_ccb, UINT16 event, void *p_dat
 
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
 
     case L2CEVT_L2CA_DISCONNECT_REQ:                 /* Upper wants to disconnect */
@@ -544,7 +545,7 @@ static void l2c_csm_w4_l2cap_connect_rsp (tL2C_CCB *p_ccb, UINT16 event, void *p
 
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
 
     case L2CEVT_L2CAP_INFO_RSP:
@@ -621,7 +622,7 @@ static void l2c_csm_w4_l2ca_connect_rsp (tL2C_CCB *p_ccb, UINT16 event, void *p_
 
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
 
     case L2CEVT_L2CA_DISCONNECT_REQ:                 /* Upper wants to disconnect */
@@ -731,10 +732,10 @@ static void l2c_csm_config (tL2C_CCB *p_ccb, UINT16 event, void *p_data)
                 }
 
 #if (L2CAP_ERTM_STATS == TRUE)
-                p_ccb->fcrb.connect_tick_count = GKI_get_os_tick_count();
+                p_ccb->fcrb.connect_tick_count = osi_time_get_os_boottime_ms();
 #endif
                 /* See if we can forward anything on the hold queue */
-                if (!GKI_queue_is_empty(&p_ccb->xmit_hold_q)) {
+                if (!fixed_queue_is_empty(p_ccb->xmit_hold_q)) {
                     l2c_link_check_send_pkts (p_ccb->p_lcb, NULL, NULL);
                 }
             }
@@ -809,11 +810,12 @@ static void l2c_csm_config (tL2C_CCB *p_ccb, UINT16 event, void *p_data)
         }
 
 #if (L2CAP_ERTM_STATS == TRUE)
-        p_ccb->fcrb.connect_tick_count = GKI_get_os_tick_count();
+        p_ccb->fcrb.connect_tick_count = osi_time_get_os_boottime_ms();
 #endif
 
         /* See if we can forward anything on the hold queue */
-        if ( (p_ccb->chnl_state == CST_OPEN) && (!GKI_queue_is_empty(&p_ccb->xmit_hold_q))) {
+        if ( (p_ccb->chnl_state == CST_OPEN) &&
+             (!fixed_queue_is_empty(p_ccb->xmit_hold_q))) {
             l2c_link_check_send_pkts (p_ccb->p_lcb, NULL, NULL);
         }
         break;
@@ -835,11 +837,11 @@ static void l2c_csm_config (tL2C_CCB *p_ccb, UINT16 event, void *p_data)
         if (p_ccb->local_cid >= L2CAP_FIRST_FIXED_CHNL &&
                 p_ccb->local_cid <= L2CAP_LAST_FIXED_CHNL) {
             if (p_ccb->local_cid < L2CAP_BASE_APPL_CID) {
-                if (l2cb.fixed_reg[p_ccb->local_cid - L2CAP_FIRST_FIXED_CHNL].pL2CA_FixedData_Cb)
+                if (l2cb.fixed_reg[p_ccb->local_cid - L2CAP_FIRST_FIXED_CHNL].pL2CA_FixedData_Cb) {
                     (*l2cb.fixed_reg[p_ccb->local_cid - L2CAP_FIRST_FIXED_CHNL].pL2CA_FixedData_Cb)
                     (p_ccb->local_cid, p_ccb->p_lcb->remote_bd_addr, (BT_HDR *)p_data);
-                else {
-                    GKI_freebuf (p_data);
+                } else {
+                    osi_free (p_data);
                 }
                 break;
             }
@@ -852,7 +854,7 @@ static void l2c_csm_config (tL2C_CCB *p_ccb, UINT16 event, void *p_data)
         if (p_ccb->config_done & OB_CFG_DONE) {
             l2c_enqueue_peer_data (p_ccb, (BT_HDR *)p_data);
         } else {
-            GKI_freebuf (p_data);
+            osi_free (p_data);
         }
         break;
 
@@ -1062,7 +1064,7 @@ static void l2c_csm_w4_l2cap_disconnect_rsp (tL2C_CCB *p_ccb, UINT16 event, void
 
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
     }
 }
@@ -1111,11 +1113,11 @@ static void l2c_csm_w4_l2ca_disconnect_rsp (tL2C_CCB *p_ccb, UINT16 event, void 
 
     case L2CEVT_L2CAP_DATA:                         /* Peer data packet rcvd    */
     case L2CEVT_L2CA_DATA_WRITE:                    /* Upper layer data to send */
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         break;
     }
 }
-
+#endif  ///CLASSIC_BT_INCLUDED == TRUE
 
 #if (BT_TRACE_VERBOSE == TRUE)
 /*******************************************************************************
@@ -1241,7 +1243,7 @@ void l2c_enqueue_peer_data (tL2C_CCB *p_ccb, BT_HDR *p_buf)
         UINT16_TO_STREAM (p, p_ccb->remote_cid);
     }
 
-    GKI_enqueue (&p_ccb->xmit_hold_q, p_buf);
+    fixed_queue_enqueue(p_ccb->xmit_hold_q, p_buf);
 
     l2cu_check_channel_congestion (p_ccb);
 

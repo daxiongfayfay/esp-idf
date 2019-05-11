@@ -29,16 +29,16 @@
 #include <stdio.h>
 #include <stddef.h>
 
-#include "bt_types.h"
-#include "controller.h"
-#include "gki.h"
-#include "hcimsgs.h"
-#include "btu.h"
-#include "btm_api.h"
+#include "osi/alarm.h"
+#include "stack/bt_types.h"
+#include "device/controller.h"
+#include "stack/hcimsgs.h"
+#include "stack/btu.h"
+#include "stack/btm_api.h"
 #include "btm_int.h"
-#include "hcidefs.h"
+#include "stack/hcidefs.h"
 #if (defined(SDP_INCLUDED) && SDP_INCLUDED == TRUE)
-#include "sdpdefs.h"
+#include "stack/sdpdefs.h"
 #endif
 
 #define BTM_INQ_REPLY_TIMEOUT   3       /* 3 second timeout waiting for responses */
@@ -170,16 +170,6 @@ tBTM_STATUS BTM_SetDiscoverability (UINT16 inq_mode, UINT16 window, UINT16 inter
     BOOLEAN      cod_limited;
 
     BTM_TRACE_API ("BTM_SetDiscoverability\n");
-#if (BLE_INCLUDED == TRUE && BLE_INCLUDED == TRUE)
-    if (controller_get_interface()->supports_ble()) {
-        if (btm_ble_set_discoverability((UINT16)(inq_mode))
-                == BTM_SUCCESS) {
-            btm_cb.btm_inq_vars.discoverable_mode &= (~BTM_BLE_DISCOVERABLE_MASK);
-            btm_cb.btm_inq_vars.discoverable_mode |= (inq_mode & BTM_BLE_DISCOVERABLE_MASK);
-        }
-    }
-    inq_mode &= ~BTM_BLE_DISCOVERABLE_MASK;
-#endif
 
     /*** Check mode parameter ***/
     if (inq_mode > BTM_MAX_DISCOVERABLE) {
@@ -600,17 +590,6 @@ tBTM_STATUS BTM_SetConnectability (UINT16 page_mode, UINT16 window, UINT16 inter
     tBTM_INQUIRY_VAR_ST *p_inq = &btm_cb.btm_inq_vars;
 
     BTM_TRACE_API ("BTM_SetConnectability\n");
-
-#if (BLE_INCLUDED == TRUE && BLE_INCLUDED == TRUE)
-    if (controller_get_interface()->supports_ble()) {
-        if (btm_ble_set_connectability(page_mode) != BTM_SUCCESS) {
-            return BTM_NO_RESOURCES;
-        }
-        p_inq->connectable_mode &= (~BTM_BLE_CONNECTABLE_MASK);
-        p_inq->connectable_mode |= (page_mode & BTM_BLE_CONNECTABLE_MASK);
-    }
-    page_mode &= ~BTM_BLE_CONNECTABLE_MASK;
-#endif
 
     /*** Check mode parameter ***/
     if (page_mode != BTM_NON_CONNECTABLE && page_mode != BTM_CONNECTABLE) {
@@ -1063,9 +1042,10 @@ tBTM_STATUS  BTM_ReadRemoteDeviceName (BD_ADDR remote_bda, tBTM_CMPL_CB *p_cb
         return btm_ble_read_remote_name(remote_bda, p_cur, p_cb);
     } else
 #endif
-
+    {
         return (btm_initiate_rem_name (remote_bda, p_cur, BTM_RMT_NAME_EXT,
                                        BTM_EXT_RMT_NAME_TIMEOUT, p_cb));
+    }
 }
 
 /*******************************************************************************
@@ -1101,11 +1081,13 @@ tBTM_STATUS  BTM_CancelRemoteDeviceName (void)
             }
         } else
 #endif
+        {
             if (btsnd_hcic_rmt_name_req_cancel (p_inq->remname_bda)) {
                 return (BTM_CMD_STARTED);
             } else {
                 return (BTM_NO_RESOURCES);
             }
+        }
     } else {
         return (BTM_WRONG_MODE);
     }
@@ -1359,6 +1341,12 @@ void btm_inq_db_init (void)
 #if 0  /* cleared in btm_init; put back in if called from anywhere else! */
     memset (&btm_cb.btm_inq_vars, 0, sizeof (tBTM_INQUIRY_VAR_ST));
 #endif
+
+    btu_free_timer(&btm_cb.btm_inq_vars.rmt_name_timer_ent);
+    memset(&btm_cb.btm_inq_vars.rmt_name_timer_ent, 0, sizeof(TIMER_LIST_ENT));
+    btu_free_timer(&btm_cb.btm_inq_vars.inq_timer_ent);
+    memset(&btm_cb.btm_inq_vars.inq_timer_ent, 0, sizeof(TIMER_LIST_ENT));
+
     btm_cb.btm_inq_vars.no_inc_ssp = BTM_NO_SSP_ON_INQUIRY;
 }
 
@@ -1461,7 +1449,7 @@ static void btm_clr_inq_result_flt (void)
     tBTM_INQUIRY_VAR_ST *p_inq = &btm_cb.btm_inq_vars;
 
     if (p_inq->p_bd_db) {
-        GKI_freebuf(p_inq->p_bd_db);
+        osi_free(p_inq->p_bd_db);
         p_inq->p_bd_db = NULL;
     }
     p_inq->num_bd_entries = 0;
@@ -1784,9 +1772,8 @@ static void btm_initiate_inquiry (tBTM_INQUIRY_VAR_ST *p_inq)
         btm_clr_inq_result_flt();
 
         /* Allocate memory to hold bd_addrs responding */
-        if ((p_inq->p_bd_db = (tINQ_BDADDR *)GKI_getbuf(GKI_MAX_BUF_SIZE)) != NULL) {
-            p_inq->max_bd_entries = (UINT16)(GKI_MAX_BUF_SIZE / sizeof(tINQ_BDADDR));
-            memset(p_inq->p_bd_db, 0, GKI_MAX_BUF_SIZE);
+        if ((p_inq->p_bd_db = (tINQ_BDADDR *)osi_calloc(BT_DEFAULT_BUFFER_SIZE)) != NULL) {
+            p_inq->max_bd_entries = (UINT16)(BT_DEFAULT_BUFFER_SIZE / sizeof(tINQ_BDADDR));
             /*            BTM_TRACE_DEBUG("btm_initiate_inquiry: memory allocated for %d bdaddrs",
                                           p_inq->max_bd_entries); */
         }
@@ -1949,7 +1936,7 @@ void btm_process_inq_results (UINT8 *p, UINT8 inq_res_mode)
             p_cur->dev_class[2]       = dc[2];
             p_cur->clock_offset       = clock_offset  | BTM_CLOCK_OFFSET_VALID;
 
-            p_i->time_of_resp = GKI_get_os_tick_count();
+            p_i->time_of_resp = osi_time_get_os_boottime_ms();
 
             if (p_i->inq_count != p_inq->inq_counter) {
                 p_inq->inq_cmpl_info.num_resp++;    /* A new response was found */
@@ -2031,7 +2018,7 @@ void btm_sort_inq_result(void)
     num_resp = (btm_cb.btm_inq_vars.inq_cmpl_info.num_resp < BTM_INQ_DB_SIZE) ?
                btm_cb.btm_inq_vars.inq_cmpl_info.num_resp : BTM_INQ_DB_SIZE;
 
-    if ((p_tmp = (tINQ_DB_ENT *)GKI_getbuf(sizeof(tINQ_DB_ENT))) != NULL) {
+    if ((p_tmp = (tINQ_DB_ENT *)osi_malloc(sizeof(tINQ_DB_ENT))) != NULL) {
         size = sizeof(tINQ_DB_ENT);
         for (xx = 0; xx < num_resp - 1; xx++, p_ent++) {
             for (yy = xx + 1, p_next = p_ent + 1; yy < num_resp; yy++, p_next++) {
@@ -2043,7 +2030,7 @@ void btm_sort_inq_result(void)
             }
         }
 
-        GKI_freebuf(p_tmp);
+        osi_free(p_tmp);
     }
 }
 
@@ -2353,8 +2340,9 @@ void btm_inq_rmt_name_failed (void)
     } else {
         btm_process_remote_name (NULL, NULL, 0, HCI_ERR_UNSPECIFIED);
     }
-
+#if (SMP_INCLUDED == TRUE)
     btm_sec_rmt_name_request_complete (NULL, NULL, HCI_ERR_UNSPECIFIED);
+#endif  ///SMP_INCLUDED == TRUE
 }
 /*******************************************************************************
 **
@@ -2411,7 +2399,7 @@ tBTM_STATUS BTM_WriteEIR( BT_HDR *p_buff )
         btsnd_hcic_write_ext_inquiry_response (p_buff, BTM_EIR_DEFAULT_FEC_REQUIRED);
         return BTM_SUCCESS;
     } else {
-        GKI_freebuf(p_buff);
+        osi_free(p_buff);
         return BTM_MODE_UNSUPPORTED;
     }
 }

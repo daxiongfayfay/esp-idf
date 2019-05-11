@@ -23,15 +23,18 @@
  *
  ******************************************************************************/
 #include <string.h>
-#include "gki.h"
-#include "bt_types.h"
-#include "rfcdefs.h"
-#include "l2cdefs.h"
-#include "port_api.h"
+#include "stack/bt_types.h"
+#include "stack/rfcdefs.h"
+#include "stack/l2cdefs.h"
+#include "stack/port_api.h"
 #include "port_int.h"
-#include "l2c_api.h"
+#include "stack/l2c_api.h"
 #include "rfc_int.h"
-#include "bt_defs.h"
+#include "common/bt_defs.h"
+#include "osi/allocator.h"
+#include "osi/mutex.h"
+#include "common/bt_target.h"
+#if (defined RFCOMM_INCLUDED && RFCOMM_INCLUDED == TRUE)
 
 #define L2CAP_SUCCESS   0
 #define L2CAP_ERROR     1
@@ -485,8 +488,8 @@ void rfc_mx_sm_state_disc_wait_ua (tRFC_MCB *p_mcb, UINT16 event, void *p_data)
             rfc_save_lcid_mcb (p_mcb, p_mcb->lcid);
 
             /* clean up before reuse it */
-            while ((p_buf = (BT_HDR *)GKI_dequeue(&p_mcb->cmd_q)) != NULL) {
-                GKI_freebuf(p_buf);
+            while ((p_buf = (BT_HDR *)fixed_queue_try_dequeue(p_mcb->cmd_q)) != NULL) {
+                osi_free(p_buf);
             }
 
             rfc_timer_start (p_mcb, RFC_MCB_INIT_INACT_TIMER);
@@ -507,7 +510,7 @@ void rfc_mx_sm_state_disc_wait_ua (tRFC_MCB *p_mcb, UINT16 event, void *p_data)
         return;
 
     case RFC_EVENT_UIH:
-        GKI_freebuf (p_data);
+        osi_free (p_data);
         rfc_send_dm (p_mcb, RFCOMM_MX_DLCI, FALSE);
         return;
 
@@ -573,7 +576,7 @@ static void rfc_mx_send_config_req (tRFC_MCB *p_mcb)
 *******************************************************************************/
 static void rfc_mx_conf_cnf (tRFC_MCB *p_mcb, tL2CAP_CFG_INFO *p_cfg)
 {
-    RFCOMM_TRACE_EVENT ("rfc_mx_conf_cnf p_cfg:%08x res:%d ", p_cfg, (p_cfg) ? p_cfg->result : 0);
+    // RFCOMM_TRACE_EVENT ("rfc_mx_conf_cnf p_cfg:%08x res:%d ", p_cfg, (p_cfg) ? p_cfg->result : 0);
 
     if (p_cfg->result != L2CAP_CFG_OK) {
         if (p_mcb->is_initiator) {
@@ -640,3 +643,5 @@ static void rfc_mx_conf_ind (tRFC_MCB *p_mcb, tL2CAP_CFG_INFO *p_cfg)
         }
     }
 }
+
+#endif ///(defined RFCOMM_INCLUDED && RFCOMM_INCLUDED == TRUE)

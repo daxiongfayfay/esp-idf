@@ -21,20 +21,20 @@
  *  This file contains functions for the SMP L2CAP utility functions
  *
  ******************************************************************************/
-#include "bt_target.h"
+#include "common/bt_target.h"
 
 #if SMP_INCLUDED == TRUE
 
-#include "bt_types.h"
+#include "stack/bt_types.h"
 //#include "bt_utils.h"
 #include <string.h>
 //#include <ctype.h>
-#include "hcidefs.h"
-#include "btm_ble_api.h"
-#include "l2c_api.h"
+#include "stack/hcidefs.h"
+#include "stack/btm_ble_api.h"
+#include "stack/l2c_api.h"
 #include "l2c_int.h"
 #include "smp_int.h"
-#include "controller.h"
+#include "device/controller.h"
 #include "btm_int.h"
 
 #define SMP_PAIRING_REQ_SIZE    7
@@ -412,7 +412,7 @@ BT_HDR *smp_build_pairing_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UINT8       *p;
 
     SMP_TRACE_EVENT("smp_build_pairing_cmd");
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_PAIRING_REQ_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_PAIRING_REQ_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, cmd_code);
@@ -445,7 +445,7 @@ static BT_HDR *smp_build_confirm_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("smp_build_confirm_cmd\n");
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_CONFIRM_CMD_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_CONFIRM_CMD_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_CONFIRM);
@@ -471,7 +471,7 @@ static BT_HDR *smp_build_rand_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("%s\n", __func__);
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_RAND_CMD_SIZE + L2CAP_MIN_OFFSET))
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_RAND_CMD_SIZE + L2CAP_MIN_OFFSET))
             != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
@@ -498,7 +498,7 @@ static BT_HDR *smp_build_encrypt_info_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("smp_build_encrypt_info_cmd\n");
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_ENC_INFO_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_ENC_INFO_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_ENCRYPT_INFO);
@@ -526,7 +526,7 @@ static BT_HDR *smp_build_master_id_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
 
     SMP_TRACE_EVENT("%s\n", __func__);
 
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_MASTER_ID_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_MASTER_ID_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_MASTER_ID);
@@ -556,7 +556,7 @@ static BT_HDR *smp_build_identity_info_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(p_cb);
 
     SMP_TRACE_EVENT("smp_build_identity_info_cmd\n");
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_ID_INFO_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_ID_INFO_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         BTM_GetDeviceIDRoot(irk);
@@ -586,12 +586,20 @@ static BT_HDR *smp_build_id_addr_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
     UNUSED(p_cb);
     SMP_TRACE_EVENT("smp_build_id_addr_cmd\n");
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_ID_ADDR_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_ID_ADDR_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_ID_ADDR);
-        UINT8_TO_STREAM (p, 0);
-        BDADDR_TO_STREAM (p, controller_get_interface()->get_address()->address);
+        /* Identity Address Information is used in the Transport Specific Key Distribution phase to distribute 
+        its public device address or static random address. if slave using static random address is encrypted,
+        it should distribute its static random address */
+        if(btm_cb.ble_ctr_cb.addr_mgnt_cb.own_addr_type == BLE_ADDR_RANDOM && memcmp(btm_cb.ble_ctr_cb.addr_mgnt_cb.static_rand_addr, btm_cb.ble_ctr_cb.addr_mgnt_cb.private_addr,6) == 0) {
+            UINT8_TO_STREAM (p, 0x01);
+            BDADDR_TO_STREAM (p, btm_cb.ble_ctr_cb.addr_mgnt_cb.static_rand_addr);
+        } else {
+            UINT8_TO_STREAM (p, 0);
+            BDADDR_TO_STREAM (p, controller_get_interface()->get_address()->address);
+        }
 
         p_buf->offset = L2CAP_MIN_OFFSET;
         p_buf->len = SMP_ID_ADDR_SIZE;
@@ -614,7 +622,7 @@ static BT_HDR *smp_build_signing_info_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("smp_build_signing_info_cmd\n");
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_SIGN_INFO_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_SIGN_INFO_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_SIGN_INFO);
@@ -641,7 +649,7 @@ static BT_HDR *smp_build_pairing_fail(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("%s\n", __func__);
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_PAIR_FAIL_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_PAIR_FAIL_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_PAIRING_FAILED);
@@ -668,7 +676,7 @@ static BT_HDR *smp_build_security_request(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("%s\n", __func__);
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + 2 + L2CAP_MIN_OFFSET)) != NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + 2 + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
         UINT8_TO_STREAM (p, SMP_OPCODE_SEC_REQ);
@@ -704,7 +712,7 @@ static BT_HDR *smp_build_pair_public_key_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     memcpy(p_publ_key, p_cb->loc_publ_key.x, BT_OCTET32_LEN);
     memcpy(p_publ_key + BT_OCTET32_LEN, p_cb->loc_publ_key.y, BT_OCTET32_LEN);
 
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) +
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) +
                                       SMP_PAIR_PUBL_KEY_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
@@ -732,7 +740,7 @@ static BT_HDR *smp_build_pairing_commitment_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("%s\n", __func__);
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + SMP_PAIR_COMMITM_SIZE + L2CAP_MIN_OFFSET))
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + SMP_PAIR_COMMITM_SIZE + L2CAP_MIN_OFFSET))
             != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
@@ -760,7 +768,7 @@ static BT_HDR *smp_build_pair_dhkey_check_cmd(UINT8 cmd_code, tSMP_CB *p_cb)
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("%s\n", __FUNCTION__);
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) +
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) +
                                       SMP_PAIR_DHKEY_CHECK_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
@@ -788,7 +796,7 @@ static BT_HDR *smp_build_pairing_keypress_notification_cmd(UINT8 cmd_code, tSMP_
     UNUSED(cmd_code);
 
     SMP_TRACE_EVENT("%s\n", __FUNCTION__);
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR)\
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR)\
                                       + SMP_PAIR_KEYPR_NOTIF_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 
@@ -877,16 +885,21 @@ void smp_xor_128(BT_OCTET16 a, BT_OCTET16 b)
 ** Returns          void
 **
 *******************************************************************************/
-void smp_cb_cleanup(tSMP_CB   *p_cb)
+void smp_cb_cleanup(tSMP_CB *p_cb)
 {
     tSMP_CALLBACK   *p_callback = p_cb->p_callback;
     UINT8           trace_level = p_cb->trace_level;
-
+    UINT32          static_passkey = p_cb->static_passkey;
+    BOOLEAN         use_static_passkey = p_cb->use_static_passkey;
     SMP_TRACE_EVENT("smp_cb_cleanup\n");
 
     memset(p_cb, 0, sizeof(tSMP_CB));
     p_cb->p_callback = p_callback;
     p_cb->trace_level = trace_level;
+    if(use_static_passkey) {
+        p_cb->use_static_passkey = use_static_passkey;
+        p_cb->static_passkey = static_passkey;
+    }
 }
 
 /*******************************************************************************
@@ -951,14 +964,23 @@ void smp_proc_pairing_cmpl(tSMP_CB *p_cb)
     tSMP_EVT_DATA   evt_data = {0};
     tSMP_CALLBACK   *p_callback = p_cb->p_callback;
     BD_ADDR         pairing_bda;
+    tBTM_SEC_DEV_REC    *p_rec = btm_find_dev (p_cb->pairing_bda);
 
     SMP_TRACE_DEBUG ("smp_proc_pairing_cmpl \n");
 
     evt_data.cmplt.reason = p_cb->status;
     evt_data.cmplt.smp_over_br = p_cb->smp_over_br;
-
+    evt_data.cmplt.auth_mode = 0;
     if (p_cb->status == SMP_SUCCESS) {
         evt_data.cmplt.sec_level = p_cb->sec_level;
+        if (p_cb->auth_mode) { // the first encryption
+            evt_data.cmplt.auth_mode = p_cb->auth_mode;
+            if (p_rec) {
+                p_rec->ble.auth_mode = p_cb->auth_mode;
+            }
+        } else if (p_rec) {
+            evt_data.cmplt.auth_mode =  p_rec->ble.auth_mode;
+        }
     }
 
     evt_data.cmplt.is_pair_cancel  = FALSE;
@@ -974,6 +996,16 @@ void smp_proc_pairing_cmpl(tSMP_CB *p_cb)
 
     memcpy (pairing_bda, p_cb->pairing_bda, BD_ADDR_LEN);
 
+#if (SMP_SLAVE_CON_PARAMS_UPD_ENABLE == TRUE)
+    if (p_cb->role == HCI_ROLE_SLAVE) {
+        if(p_rec && p_rec->ble.skip_update_conn_param) {
+            //clear flag
+            p_rec->ble.skip_update_conn_param = false;
+        } else {
+            L2CA_EnableUpdateBleConnParams(p_cb->pairing_bda, TRUE);
+        }
+    }
+#endif
     smp_reset_control_value(p_cb);
 
     if (p_callback) {
@@ -1163,7 +1195,7 @@ void smp_reject_unexpected_pairing_command(BD_ADDR bd_addr)
 
     SMP_TRACE_DEBUG ("%s\n", __FUNCTION__);
 
-    if ((p_buf = (BT_HDR *)GKI_getbuf(sizeof(BT_HDR) + \
+    if ((p_buf = (BT_HDR *)osi_malloc(sizeof(BT_HDR) + \
                                       SMP_PAIR_FAIL_SIZE + L2CAP_MIN_OFFSET)) != NULL) {
         p = (UINT8 *)(p_buf + 1) + L2CAP_MIN_OFFSET;
 

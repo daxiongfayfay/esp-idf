@@ -23,13 +23,16 @@
  ******************************************************************************/
 
 #include <stddef.h>
-#include "bt_target.h"
-#include "gki.h"
-#include "rfcdefs.h"
-#include "port_api.h"
-#include "l2c_api.h"
+#include <string.h>
+#include "common/bt_target.h"
+#include "stack/rfcdefs.h"
+#include "stack/port_api.h"
+#include "stack/l2c_api.h"
 #include "port_int.h"
 #include "rfc_int.h"
+#include "osi/mutex.h"
+#include "osi/allocator.h"
+#if (defined RFCOMM_INCLUDED && RFCOMM_INCLUDED == TRUE)
 
 /*******************************************************************************
 **
@@ -44,7 +47,7 @@ void rfc_send_sabme (tRFC_MCB *p_mcb, UINT8 dlci)
     UINT8   *p_data;
     UINT8   cr = RFCOMM_CR(p_mcb->is_initiator, TRUE);
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -77,7 +80,7 @@ void rfc_send_ua (tRFC_MCB *p_mcb, UINT8 dlci)
     UINT8   *p_data;
     UINT8   cr = RFCOMM_CR(p_mcb->is_initiator, FALSE);
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -110,7 +113,7 @@ void rfc_send_dm (tRFC_MCB *p_mcb, UINT8 dlci, BOOLEAN pf)
     UINT8   *p_data;
     UINT8   cr = RFCOMM_CR(p_mcb->is_initiator, FALSE);
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -143,7 +146,7 @@ void rfc_send_disc (tRFC_MCB *p_mcb, UINT8 dlci)
     UINT8   *p_data;
     UINT8   cr = RFCOMM_CR(p_mcb->is_initiator, TRUE);
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -234,7 +237,7 @@ void rfc_send_pn (tRFC_MCB *p_mcb, UINT8 dlci, BOOLEAN is_command, UINT16 mtu, U
     BT_HDR   *p_buf;
     UINT8    *p_data;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -281,7 +284,7 @@ void rfc_send_fcon (tRFC_MCB *p_mcb, BOOLEAN is_command)
     BT_HDR  *p_buf;
     UINT8   *p_data;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -310,7 +313,7 @@ void rfc_send_fcoff (tRFC_MCB *p_mcb, BOOLEAN is_command)
     BT_HDR  *p_buf;
     UINT8   *p_data;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -346,7 +349,7 @@ void rfc_send_msc (tRFC_MCB *p_mcb, UINT8 dlci, BOOLEAN is_command,
     signals        = p_pars->modem_signal;
     break_duration = p_pars->break_signal;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -394,7 +397,7 @@ void rfc_send_rls (tRFC_MCB *p_mcb, UINT8 dlci, BOOLEAN is_command, UINT8 status
     BT_HDR  *p_buf;
     UINT8   *p_data;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -426,7 +429,7 @@ void rfc_send_nsc (tRFC_MCB *p_mcb)
     BT_HDR  *p_buf;
     UINT8   *p_data;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -460,7 +463,7 @@ void rfc_send_rpn (tRFC_MCB *p_mcb, UINT8 dlci, BOOLEAN is_command,
     BT_HDR   *p_buf;
     UINT8    *p_data;
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -511,6 +514,13 @@ void rfc_send_test (tRFC_MCB *p_mcb, BOOLEAN is_command, BT_HDR *p_buf)
     UINT16   xx;
     UINT8    *p_src, *p_dest;
 
+    BT_HDR *p_buf_new;
+    if ((p_buf_new = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
+        return;
+    }
+    memcpy(p_buf_new, p_buf, sizeof(BT_HDR) + p_buf->offset + p_buf->len);
+    osi_free(p_buf);
+    p_buf = p_buf_new;
     /* Shift buffer to give space for header */
     if (p_buf->offset < (L2CAP_MIN_OFFSET + RFCOMM_MIN_OFFSET + 2)) {
         p_src  = (UINT8 *) (p_buf + 1) + p_buf->offset + p_buf->len - 1;
@@ -548,7 +558,7 @@ void rfc_send_credit(tRFC_MCB *p_mcb, UINT8 dlci, UINT8 credit)
     UINT8    *p_data;
     UINT8    cr = RFCOMM_CR(p_mcb->is_initiator, TRUE);
 
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (RFCOMM_CMD_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(RFCOMM_CMD_BUF_SIZE)) == NULL) {
         return;
     }
 
@@ -701,7 +711,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
 
     if (!p_rx_frame->ea || !length) {
         RFCOMM_TRACE_ERROR ("Illegal MX Frame ea:%d len:%d", p_rx_frame->ea, length);
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
         return;
     }
 
@@ -721,7 +731,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
 
     if (mx_len != length) {
         RFCOMM_TRACE_ERROR ("Bad MX frame");
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
         return;
     }
 
@@ -749,7 +759,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
             break;
         }
 
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_pn (p_mcb, is_command, p_rx_frame);
         return;
@@ -777,7 +787,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
             break;
         }
 
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_fcon (p_mcb, is_command);
         return;
@@ -787,7 +797,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
             break;
         }
 
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_fcoff (p_mcb, is_command);
         return;
@@ -813,7 +823,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
             p_rx_frame->u.msc.break_present  = FALSE;
             p_rx_frame->u.msc.break_duration = 0;
         }
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_msc (p_mcb, is_command, p_rx_frame);
         return;
@@ -827,7 +837,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
         p_rx_frame->u.nsc.cr   = (*p_data & RFCOMM_CR_MASK) >> RFCOMM_SHIFT_CR;
         p_rx_frame->u.nsc.type = *p_data++ >> RFCOMM_SHIFT_DLCI;
 
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_nsc (p_mcb, p_rx_frame);
         return;
@@ -861,7 +871,7 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
             p_rx_frame->u.rpn.xoff_char   = *p_data++;
             p_rx_frame->u.rpn.param_mask  = (*p_data + (*(p_data + 1) << 8)) & RFCOMM_RPN_PM_MASK;
         }
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_rpn (p_mcb, is_command, p_rx_frame->u.rpn.is_request, p_rx_frame);
         return;
@@ -883,16 +893,17 @@ void rfc_process_mx_message (tRFC_MCB *p_mcb, BT_HDR *p_buf)
             break;
         }
 
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
 
         rfc_process_rls (p_mcb, is_command, p_rx_frame);
         return;
     }
 
-    GKI_freebuf (p_buf);
+    osi_free (p_buf);
 
     if (is_command) {
         rfc_send_nsc (p_mcb);
     }
 }
 
+#endif ///(defined RFCOMM_INCLUDED && RFCOMM_INCLUDED == TRUE)

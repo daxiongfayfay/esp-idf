@@ -1,5 +1,5 @@
 %option nostdinit noyywrap never-interactive full ecs
-%option 8bit nodefault perf-report perf-report
+%option 8bit perf-report perf-report
 %option noinput
 %x COMMAND HELP STRING PARAM
 %{
@@ -151,7 +151,7 @@ n	[A-Za-z0-9_-]
 		return T_WORD;
 	}
 	#.*	/* comment */
-	\\\n	current_file->lineno++;
+	\\\r?\n	current_file->lineno++;
 	[[:blank:]]+
 	.	warn_ignored_character(*yytext);
 	<<EOF>> {

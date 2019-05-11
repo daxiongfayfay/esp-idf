@@ -16,20 +16,20 @@
  *
  ******************************************************************************/
 
-#include "bta_api.h"
+#include "bta/bta_api.h"
 #include "bta_hh_int.h"
 
 #if (defined BTA_HH_LE_INCLUDED && BTA_HH_LE_INCLUDED == TRUE)
 
-#include "bta_api.h"
+#include "bta/bta_api.h"
 #include <string.h>
-#include "btm_api.h"
-#include "btm_ble_api.h"
-#include "bta_hh_co.h"
-#include "bta_gatt_api.h"
+#include "stack/btm_api.h"
+#include "stack/btm_ble_api.h"
+#include "bta/bta_hh_co.h"
+#include "bta/bta_gatt_api.h"
 #include "srvc_api.h"
 #include "btm_int.h"
-#include "utl.h"
+#include "bta/utl.h"
 
 #define LOG_TAG "bt_bta_hh"
 #include "osi/include/log.h"
@@ -334,7 +334,7 @@ void bta_hh_le_open_conn(tBTA_HH_DEV_CB *p_cb, BD_ADDR remote_bda)
     bta_hh_cb.le_cb_index[BTA_HH_GET_LE_CB_IDX(p_cb->hid_handle)] = p_cb->index;
     p_cb->in_use = TRUE;
 
-    BTA_GATTC_Open(bta_hh_cb.gatt_if, remote_bda, TRUE, BTA_GATT_TRANSPORT_LE);
+    BTA_GATTC_Open(bta_hh_cb.gatt_if, remote_bda, BLE_ADDR_UNKNOWN_TYPE, TRUE, BTA_GATT_TRANSPORT_LE);
 }
 
 /*******************************************************************************
@@ -613,7 +613,7 @@ tBTA_HH_STATUS bta_hh_le_read_char_dscrpt(tBTA_HH_DEV_CB *p_cb, UINT16 srvc_uuid
         status = BTA_HH_OK;
     } else {
 #if BTA_HH_DEBUG == TRUE
-        LOG_WARN("%s No descriptor exists: %s(0x%04x)", __func__,
+        APPL_TRACE_WARNING("%s No descriptor exists: %s(0x%04x)", __func__,
                  bta_hh_uuid_to_str(char_descp_uuid), char_descp_uuid);
 #endif
     }
@@ -1092,7 +1092,7 @@ void bta_hh_le_expl_rpt(tBTA_HH_DEV_CB *p_dev_cb,
         p_char_id = &char_result;
     } while (1);
 
-    LOG_INFO("%s all BLE reports searched", __func__);
+    APPL_TRACE_API("%s all BLE reports searched", __func__);
     bta_hh_le_read_rpt_ref_descr(p_dev_cb,
                                  &p_dev_cb->hid_srvc[p_dev_cb->cur_srvc_index].report[0]);
 
@@ -1425,7 +1425,7 @@ void bta_hh_le_close(tBTA_GATTC_CLOSE *p_data)
     UINT16  sm_event = BTA_HH_GATT_CLOSE_EVT;
 
     if (p_dev_cb != NULL &&
-            (p_buf = (tBTA_HH_LE_CLOSE *)GKI_getbuf(sizeof(tBTA_HH_LE_CLOSE))) != NULL) {
+            (p_buf = (tBTA_HH_LE_CLOSE *)osi_malloc(sizeof(tBTA_HH_LE_CLOSE))) != NULL) {
         p_buf->hdr.event            = sm_event;
         p_buf->hdr.layer_specific   = (UINT16)p_dev_cb->hid_handle;
         p_buf->conn_id              = p_data->conn_id;
@@ -1757,11 +1757,11 @@ void bta_hh_le_save_rpt_map(tBTA_HH_DEV_CB *p_dev_cb, tBTA_GATTC_READ *p_data)
 
     /* save report descriptor */
     if (p_srvc->rpt_map != NULL) {
-        GKI_freebuf((void *)p_srvc->rpt_map);
+        osi_free((void *)p_srvc->rpt_map);
     }
 
     if (p_data->p_value->unformat.len > 0) {
-        p_srvc->rpt_map = (UINT8 *)GKI_getbuf(p_data->p_value->unformat.len);
+        p_srvc->rpt_map = (UINT8 *)osi_malloc(p_data->p_value->unformat.len);
     }
 
     if (p_srvc->rpt_map != NULL) {
@@ -1814,7 +1814,7 @@ void bta_hh_le_proc_get_rpt_cmpl(tBTA_HH_DEV_CB *p_dev_cb, tBTA_GATTC_READ *p_da
 
         if (p_rpt != NULL &&
                 p_data->p_value != NULL &&
-                (p_buf = (BT_HDR *)GKI_getbuf((UINT16)(sizeof(BT_HDR) + p_data->p_value->unformat.len + 1))) != NULL) {
+                (p_buf = (BT_HDR *)osi_malloc((UINT16)(sizeof(BT_HDR) + p_data->p_value->unformat.len + 1))) != NULL) {
             /* pack data send to app */
             hs_data.status  = BTA_HH_OK;
             p_buf->len = p_data->p_value->unformat.len + 1;
@@ -2183,9 +2183,10 @@ void bta_hh_le_write_char_descr_cmpl(tBTA_HH_DEV_CB *p_dev_cb, tBTA_HH_DATA *p_b
         case GATT_UUID_HID_BT_KB_INPUT:
         case GATT_UUID_HID_BT_MOUSE_INPUT:
         case GATT_UUID_HID_REPORT:
-            if (p_data->status == BTA_GATT_OK)
+            if (p_data->status == BTA_GATT_OK) {
                 p_dev_cb->hid_srvc[hid_inst_id].report[p_dev_cb->clt_cfg_idx].client_cfg_value =
                     BTA_GATT_CLT_CONFIG_NOTIFICATION;
+            }
             p_dev_cb->clt_cfg_idx ++;
             bta_hh_le_write_rpt_clt_cfg(p_dev_cb, hid_inst_id);
 
@@ -2252,7 +2253,7 @@ void bta_hh_le_input_rpt_notify(tBTA_GATTC_NOTIFY *p_data)
 
     /* need to append report ID to the head of data */
     if (p_rpt->rpt_id != 0) {
-        if ((p_buf = (UINT8 *)GKI_getbuf((UINT16)(p_data->len + 1))) == NULL) {
+        if ((p_buf = (UINT8 *)osi_malloc((UINT16)(p_data->len + 1))) == NULL) {
             APPL_TRACE_ERROR("No resources to send report data");
             return;
         }
@@ -2274,7 +2275,7 @@ void bta_hh_le_input_rpt_notify(tBTA_GATTC_NOTIFY *p_data)
                    app_id);
 
     if (p_buf != p_data->value) {
-        GKI_freebuf(p_buf);
+        osi_free(p_buf);
     }
 }
 
@@ -2436,7 +2437,7 @@ void bta_hh_le_write_rpt(tBTA_HH_DEV_CB *p_cb, UINT8 srvc_inst,
 
     if (p_rpt == NULL) {
         APPL_TRACE_ERROR("bta_hh_le_write_rpt: no matching report");
-        GKI_freebuf(p_buf);
+        osi_free(p_buf);
         return;
     }
 
@@ -2577,7 +2578,7 @@ void bta_hh_le_get_dscp_act(tBTA_HH_DEV_CB *p_cb)
 **
 ** Function         bta_hh_le_add_dev_bg_conn
 **
-** Description      Remove a LE HID device from back ground connection procedure.
+** Description      Remove a LE HID device from background connection procedure.
 **
 ** Returns          void
 **
@@ -2600,7 +2601,7 @@ static void bta_hh_le_add_dev_bg_conn(tBTA_HH_DEV_CB *p_cb, BOOLEAN check_bond)
     if (/*p_cb->dscp_info.flag & BTA_HH_LE_NORMAL_CONN &&*/
         !p_cb->in_bg_conn && to_add) {
         /* add device into BG connection to accept remote initiated connection */
-        BTA_GATTC_Open(bta_hh_cb.gatt_if, p_cb->addr, FALSE, BTA_GATT_TRANSPORT_LE);
+        BTA_GATTC_Open(bta_hh_cb.gatt_if, p_cb->addr, BLE_ADDR_UNKNOWN_TYPE, FALSE, BTA_GATT_TRANSPORT_LE);
         p_cb->in_bg_conn = TRUE;
 
         BTA_DmBleSetBgConnType(BTA_DM_BLE_CONN_AUTO, NULL);
@@ -2613,7 +2614,7 @@ static void bta_hh_le_add_dev_bg_conn(tBTA_HH_DEV_CB *p_cb, BOOLEAN check_bond)
 ** Function         bta_hh_le_add_device
 **
 ** Description      Add a LE HID device as a known device, and also add the address
-**                  into back ground connection WL for incoming connection.
+**                  into background connection WL for incoming connection.
 **
 ** Returns          void
 **
@@ -2648,7 +2649,7 @@ UINT8 bta_hh_le_add_device(tBTA_HH_DEV_CB *p_cb, tBTA_HH_MAINT_DEV *p_dev_info)
 **
 ** Function         bta_hh_le_remove_dev_bg_conn
 **
-** Description      Remove a LE HID device from back ground connection procedure.
+** Description      Remove a LE HID device from background connection procedure.
 **
 ** Returns          void
 **

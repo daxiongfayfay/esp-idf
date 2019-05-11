@@ -16,7 +16,7 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
 #if SMP_INCLUDED == TRUE
 
@@ -235,7 +235,7 @@ static const UINT8 smp_master_entry_map[][SMP_STATE_MAX] = {
     /* PAIR_RSP             */{ 0,    0,     0,      1,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    0,     0   },
     /* CONFIRM              */{ 0,    0,     0,      0,     0,   1,    0,   0,      0,      0,    0,    0,      0,     0,     0,    0,     0   },
     /* RAND                 */{ 0,    0,     0,      0,     0,   0,    1,   0,      0,      0,    1,    0,      0,     0,     0,    0,     0   },
-    /* PAIR_FAIL            */{ 0,    0x81,  0,      0x81,  0x81, 0x81, 0x81, 0x81,   0x81,   0x81, 0x81, 0x81,   0x81,  0x81,  0,    0,     0   },
+    /* PAIR_FAIL            */{ 0,    0x81,  0,      0x81,  0x81, 0x81, 0x81, 0x81,   0x81,   0x81, 0x81, 0x81,   0x81,  0x81,  0,    0x81,     0   },
     /* ENC_INFO             */{ 0,    0,     0,      0,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    1,     0   },
     /* MASTER_ID            */{ 0,    0,     0,      0,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    4,     0   },
     /* ID_INFO              */{ 0,    0,     0,      0,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    2,     0   },
@@ -419,7 +419,7 @@ static const UINT8 smp_master_create_local_sec_conn_oob_data[][SMP_SM_NUM_COLS] 
 static const UINT8 smp_slave_entry_map[][SMP_STATE_MAX] = {
     /* state name:             Idle WaitApp SecReq Pair   Wait Confirm Rand PublKey SCPhs1  Wait  Wait  SCPhs2  Wait   DHKChk Enc   Bond  CrLocSc
                                      Rsp    Pend   ReqRsp Cfm               Exch    Strt    Cmtm  Nonce Strt    DHKChk        Pend  Pend  OobData   */
-    /* PAIR_REQ             */{ 2,    1,     1,      0,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    0,     0   },
+    /* PAIR_REQ             */{ 2,    0,     1,      0,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    0,     0   },
     /* PAIR_RSP             */{ 0,    0,     0,      0,     0,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    0,     0   },
     /* CONFIRM              */{ 0,    4,     0,      1,     1,   0,    0,   0,      0,      0,    0,    0,      0,     0,     0,    0,     0   },
     /* RAND                 */{ 0,    0,     0,      0,     0,   1,    2,   0,      0,      0,    1,    0,      0,     0,     0,    0,     0   },
@@ -676,6 +676,8 @@ static const tSMP_ENTRY_TBL smp_entry_table[] = {
 
 #if SMP_DYNAMIC_MEMORY == FALSE
 tSMP_CB  smp_cb;
+#else
+tSMP_CB  *smp_cb_ptr;
 #endif
 #define SMP_ALL_TBL_MASK        0x80
 

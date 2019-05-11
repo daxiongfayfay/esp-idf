@@ -31,6 +31,8 @@ extern "C" {
 
 #define SPI_FLASH_SEC_SIZE  4096    /**< SPI Flash sector size */
 
+#define SPI_FLASH_MMU_PAGE_SIZE 0x10000 /**< Flash cache MMU mapping page size */
+
 /**
  * @brief  Initialize SPI flash access driver
  *
@@ -75,16 +77,20 @@ esp_err_t spi_flash_erase_range(size_t start_address, size_t size);
 /**
  * @brief  Write data to Flash.
  *
- * @note If source address is in DROM, this function will return
- *       ESP_ERR_INVALID_ARG.
+ * @note For fastest write performance, write a 4 byte aligned size at a
+ * 4 byte aligned offset in flash from a source buffer in DRAM. Varying any of
+ * these parameters will still work, but will be slower due to buffering.
  *
- * @param  dest  destination address in Flash. Must be a multiple of 4 bytes.
- * @param  src   pointer to the source buffer.
- * @param  size  length of data, in bytes. Must be a multiple of 4 bytes.
+ * @note Writing more than 8KB at a time will be split into multiple
+ * write operations to avoid disrupting other tasks in the system.
+ *
+ * @param  dest_addr Destination address in Flash.
+ * @param  src       Pointer to the source buffer.
+ * @param  size      Length of data, in bytes.
  *
  * @return esp_err_t
  */
-esp_err_t spi_flash_write(size_t dest, const void *src, size_t size);
+esp_err_t spi_flash_write(size_t dest_addr, const void *src, size_t size);
 
 
 /**
@@ -92,21 +98,54 @@ esp_err_t spi_flash_write(size_t dest, const void *src, size_t size);
  *
  * @note Flash encryption must be enabled for this function to work.
  *
- * @note Address in flash, dest, has to be 32-byte aligned.
+ * @note Flash encryption must be enabled when calling this function.
+ * If flash encryption is disabled, the function returns
+ * ESP_ERR_INVALID_STATE.  Use esp_flash_encryption_enabled()
+ * function to determine if flash encryption is enabled.
  *
- * @note If source address is in DROM, this function will return
- *       ESP_ERR_INVALID_ARG.
+ * @note Both dest_addr and size must be multiples of 16 bytes. For
+ * absolute best performance, both dest_addr and size arguments should
+ * be multiples of 32 bytes.
  *
- * @param  dest  destination address in Flash. Must be a multiple of 32 bytes.
- * @param  src   pointer to the source buffer.
- * @param  size  length of data, in bytes. Must be a multiple of 32 bytes.
+ * @param  dest_addr Destination address in Flash. Must be a multiple of 16 bytes.
+ * @param  src       Pointer to the source buffer.
+ * @param  size      Length of data, in bytes. Must be a multiple of 16 bytes.
  *
  * @return esp_err_t
  */
-esp_err_t spi_flash_write_encrypted(size_t dest, const void *src, size_t size);
+esp_err_t spi_flash_write_encrypted(size_t dest_addr, const void *src, size_t size);
 
 /**
  * @brief  Read data from Flash.
+ *
+ * @note For fastest read performance, all parameters should be
+ * 4 byte aligned. If source address and read size are not 4 byte
+ * aligned, read may be split into multiple flash operations. If
+ * destination buffer is not 4 byte aligned, a temporary buffer will
+ * be allocated on the stack.
+ *
+ * @note Reading more than 16KB of data at a time will be split
+ * into multiple reads to avoid disruption to other tasks in the
+ * system. Consider using spi_flash_mmap() to read large amounts
+ * of data.
+ *
+ * @param  src_addr source address of the data in Flash.
+ * @param  dest     pointer to the destination buffer
+ * @param  size     length of data
+ *
+ *
+ * @return esp_err_t
+ */
+esp_err_t spi_flash_read(size_t src_addr, void *dest, size_t size);
+
+
+/**
+ * @brief  Read data from Encrypted Flash.
+ *
+ * If flash encryption is enabled, this function will transparently decrypt data as it is read.
+ * If flash encryption is not enabled, this function behaves the same as spi_flash_read().
+ *
+ * See esp_flash_encryption_enabled() for a function to check if flash encryption is enabled.
  *
  * @param  src   source address of the data in Flash.
  * @param  dest  pointer to the destination buffer
@@ -114,7 +153,7 @@ esp_err_t spi_flash_write_encrypted(size_t dest, const void *src, size_t size);
  *
  * @return esp_err_t
  */
-esp_err_t spi_flash_read(size_t src, void *dest, size_t size);
+esp_err_t spi_flash_read_encrypted(size_t src, void *dest, size_t size);
 
 /**
  * @brief Enumeration which specifies memory space requested in an mmap call
@@ -132,25 +171,54 @@ typedef uint32_t spi_flash_mmap_handle_t;
 /**
  * @brief Map region of flash memory into data or instruction address space
  *
- * This function allocates sufficient number of 64k MMU pages and configures
- * them to map request region of flash memory into data address space or into
- * instruction address space. It may reuse MMU pages which already provide
- * required mapping. As with any allocator, there is possibility of fragmentation
- * of address space if mmap/munmap are heavily used. To troubleshoot issues with
- * page allocation, use spi_flash_mmap_dump function.
+ * This function allocates sufficient number of 64kB MMU pages and configures
+ * them to map the requested region of flash memory into the address space.
+ * It may reuse MMU pages which already provide the required mapping.
+ *
+ * As with any allocator, if mmap/munmap are heavily used then the address space
+ * may become fragmented. To troubleshoot issues with page allocation, use
+ * spi_flash_mmap_dump() function.
  *
  * @param src_addr  Physical address in flash where requested region starts.
- *                  This address *must* be aligned to 64kB boundary.
- * @param size  Size of region which has to be mapped. This size will be rounded
- *              up to a 64k boundary.
- * @param memory  Memory space where the region should be mapped
- * @param out_ptr  Output, pointer to the mapped memory region
- * @param out_handle  Output, handle which should be used for spi_flash_munmap call
+ *                  This address *must* be aligned to 64kB boundary
+ *                  (SPI_FLASH_MMU_PAGE_SIZE)
+ * @param size  Size of region to be mapped. This size will be rounded
+ *              up to a 64kB boundary
+ * @param memory  Address space where the region should be mapped (data or instruction)
+ * @param[out] out_ptr  Output, pointer to the mapped memory region
+ * @param[out] out_handle  Output, handle which should be used for spi_flash_munmap call
  *
  * @return  ESP_OK on success, ESP_ERR_NO_MEM if pages can not be allocated
  */
-esp_err_t spi_flash_mmap(uint32_t src_addr, size_t size, spi_flash_mmap_memory_t memory,
+esp_err_t spi_flash_mmap(size_t src_addr, size_t size, spi_flash_mmap_memory_t memory,
                          const void** out_ptr, spi_flash_mmap_handle_t* out_handle);
+
+/**
+ * @brief Map sequences of pages of flash memory into data or instruction address space
+ *
+ * This function allocates sufficient number of 64kB MMU pages and configures
+ * them to map the indicated pages of flash memory contiguously into address space.
+ * In this respect, it works in a similar way as spi_flash_mmap() but it allows mapping
+ * a (maybe non-contiguous) set of pages into a contiguous region of memory.
+ *
+ * @param pages An array of numbers indicating the 64kB pages in flash to be mapped
+ *              contiguously into memory. These indicate the indexes of the 64kB pages,
+ *              not the byte-size addresses as used in other functions.
+ *              Array must be located in internal memory.
+ * @param page_count  Number of entries in the pages array
+ * @param memory  Address space where the region should be mapped (instruction or data)
+ * @param[out] out_ptr  Output, pointer to the mapped memory region
+ * @param[out] out_handle  Output, handle which should be used for spi_flash_munmap call
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_NO_MEM if pages can not be allocated
+ *      - ESP_ERR_INVALID_ARG if pagecount is zero or pages array is not in
+ *        internal memory
+ */
+esp_err_t spi_flash_mmap_pages(const int *pages, size_t page_count, spi_flash_mmap_memory_t memory,
+                         const void** out_ptr, spi_flash_mmap_handle_t* out_handle);
+
 
 /**
  * @brief Release region previously obtained using spi_flash_mmap
@@ -172,6 +240,155 @@ void spi_flash_munmap(spi_flash_mmap_handle_t handle);
  * MMU table and corresponding reference counts.
  */
 void spi_flash_mmap_dump();
+
+/**
+ * @brief get free pages number which can be mmap
+ *
+ * This function will return number of free pages available in mmu table. This could be useful
+ * before calling actual spi_flash_mmap (maps flash range to DCache or ICache memory) to check
+ * if there is sufficient space available for mapping.
+ *
+ * @param memory memory type of MMU table free page
+ *
+ * @return number of free pages which can be mmaped
+ */
+uint32_t spi_flash_mmap_get_free_pages(spi_flash_mmap_memory_t memory);
+
+
+#define SPI_FLASH_CACHE2PHYS_FAIL UINT32_MAX /*<! Result from spi_flash_cache2phys() if flash cache address is invalid */
+
+/**
+ * @brief Given a memory address where flash is mapped, return the corresponding physical flash offset.
+ *
+ * Cache address does not have have been assigned via spi_flash_mmap(), any address in memory mapped flash space can be looked up.
+ *
+ * @param cached Pointer to flashed cached memory.
+ *
+ * @return
+ * - SPI_FLASH_CACHE2PHYS_FAIL If cache address is outside flash cache region, or the address is not mapped.
+ * - Otherwise, returns physical offset in flash
+ */
+size_t spi_flash_cache2phys(const void *cached);
+
+/** @brief Given a physical offset in flash, return the address where it is mapped in the memory space.
+ *
+ * Physical address does not have to have been assigned via spi_flash_mmap(), any address in flash can be looked up.
+ *
+ * @note Only the first matching cache address is returned. If MMU flash cache table is configured so multiple entries
+ * point to the same physical address, there may be more than one cache address corresponding to that physical
+ * address. It is also possible for a single physical address to be mapped to both the IROM and DROM regions.
+ *
+ * @note This function doesn't impose any alignment constraints, but if memory argument is SPI_FLASH_MMAP_INST and
+ * phys_offs is not 4-byte aligned, then reading from the returned pointer will result in a crash.
+ *
+ * @param phys_offs Physical offset in flash memory to look up.
+ * @param memory Address space type to look up a flash cache address mapping for (instruction or data)
+ *
+ * @return
+ * - NULL if the physical address is invalid or not mapped to flash cache of the specified memory type.
+ * - Cached memory address (in IROM or DROM space) corresponding to phys_offs.
+ */
+const void *spi_flash_phys2cache(size_t phys_offs, spi_flash_mmap_memory_t memory);
+
+/** @brief Check at runtime if flash cache is enabled on both CPUs
+ *
+ * @return true if both CPUs have flash cache enabled, false otherwise.
+ */
+bool spi_flash_cache_enabled();
+
+/**
+ * @brief SPI flash critical section enter function.
+ *
+ */
+typedef void (*spi_flash_guard_start_func_t)(void);
+/**
+ * @brief SPI flash critical section exit function.
+ */
+typedef void (*spi_flash_guard_end_func_t)(void);
+/**
+ * @brief SPI flash operation lock function.
+ */
+typedef void (*spi_flash_op_lock_func_t)(void);
+/**
+ * @brief SPI flash operation unlock function.
+ */
+typedef void (*spi_flash_op_unlock_func_t)(void);
+/**
+ * @brief Function to protect SPI flash critical regions corruption.
+ */
+typedef bool (*spi_flash_is_safe_write_address_t)(size_t addr, size_t size);
+
+/**
+ * Structure holding SPI flash access critical sections management functions.
+ *
+ * Flash API uses two types of flash access management functions:
+ * 1) Functions which prepare/restore flash cache and interrupts before calling
+ *    appropriate ROM functions (SPIWrite, SPIRead and SPIEraseBlock):
+ *   - 'start' function should disables flash cache and non-IRAM interrupts and
+ *      is invoked before the call to one of ROM function above.
+ *   - 'end' function should restore state of flash cache and non-IRAM interrupts and
+ *      is invoked after the call to one of ROM function above.
+ *    These two functions are not recursive.
+ * 2) Functions which synchronizes access to internal data used by flash API.
+ *    This functions are mostly intended to synchronize access to flash API internal data
+ *    in multithreaded environment and use OS primitives:
+ *   - 'op_lock' locks access to flash API internal data.
+ *   - 'op_unlock' unlocks access to flash API internal data.
+ *   These two functions are recursive and can be used around the outside of multiple calls to
+ *   'start' & 'end', in order to create atomic multi-part flash operations.
+ * 3) When CONFIG_SPI_FLASH_WRITING_DANGEROUS_REGIONS_ALLOWED is disabled, flash writing/erasing
+ *    API checks for addresses provided by user to avoid corruption of critical flash regions
+ *    (bootloader, partition table, running application etc.).
+ *
+ * Different versions of the guarding functions should be used depending on the context of
+ * execution (with or without functional OS). In normal conditions when flash API is called
+ * from task the functions use OS primitives. When there is no OS at all or when
+ * it is not guaranteed that OS is functional (accessing flash from exception handler) these
+ * functions cannot use OS primitives or even does not need them (multithreaded access is not possible).
+ *
+ * @note Structure and corresponding guard functions should not reside in flash.
+ *       For example structure can be placed in DRAM and functions in IRAM sections.
+ */
+typedef struct {
+    spi_flash_guard_start_func_t        start;      /**< critical section start function. */
+    spi_flash_guard_end_func_t          end;        /**< critical section end function. */
+    spi_flash_op_lock_func_t            op_lock;    /**< flash access API lock function.*/
+    spi_flash_op_unlock_func_t          op_unlock;  /**< flash access API unlock function.*/
+#if !CONFIG_SPI_FLASH_WRITING_DANGEROUS_REGIONS_ALLOWED
+    spi_flash_is_safe_write_address_t   is_safe_write_address; /**< checks flash write addresses.*/
+#endif
+} spi_flash_guard_funcs_t;
+
+/**
+ * @brief  Sets guard functions to access flash.
+ *
+ * @note Pointed structure and corresponding guard functions should not reside in flash.
+ *       For example structure can be placed in DRAM and functions in IRAM sections.
+ *
+ * @param funcs pointer to structure holding flash access guard functions.
+ */
+void spi_flash_guard_set(const spi_flash_guard_funcs_t* funcs);
+
+/**
+ * @brief Get the guard functions used for flash access
+ *
+ * @return The guard functions that were set via spi_flash_guard_set(). These functions
+ * can be called if implementing custom low-level SPI flash operations.
+ */
+const spi_flash_guard_funcs_t *spi_flash_guard_get();
+
+/**
+ * @brief Default OS-aware flash access guard functions
+ */
+extern const spi_flash_guard_funcs_t g_flash_guard_default_ops;
+
+/**
+ * @brief Non-OS flash access guard functions
+ *
+ * @note This version of flash guard functions is to be used when no OS is present or from panic handler.
+ *       It does not use any OS primitives and IPC and implies that only calling CPU is active.
+ */
+extern const spi_flash_guard_funcs_t g_flash_guard_no_os_ops;
 
 #if CONFIG_SPI_FLASH_ENABLE_COUNTERS
 

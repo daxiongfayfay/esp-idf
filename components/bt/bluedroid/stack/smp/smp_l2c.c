@@ -22,13 +22,14 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
+#include "osi/allocator.h"
 
 #if SMP_INCLUDED == TRUE
 
 #include <string.h>
-#include "btm_ble_api.h"
-#include "l2c_api.h"
+#include "stack/btm_ble_api.h"
+#include "stack/l2c_api.h"
 
 #include "smp_int.h"
 
@@ -38,10 +39,11 @@ static void smp_tx_complete_callback(UINT16 cid, UINT16 num_pkt);
 static void smp_connect_callback(UINT16 channel, BD_ADDR bd_addr, BOOLEAN connected, UINT16 reason,
                                  tBT_TRANSPORT transport);
 static void smp_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf);
-
+#if (CLASSIC_BT_INCLUDED == TRUE)
 static void smp_br_connect_callback(UINT16 channel, BD_ADDR bd_addr, BOOLEAN connected, UINT16 reason,
                                     tBT_TRANSPORT transport);
 static void smp_br_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf);
+#endif  ///CLASSIC_BT_INCLUDED == TRUE
 
 /*******************************************************************************
 **
@@ -67,14 +69,19 @@ void smp_l2cap_if_init (void)
     fixed_reg.pL2CA_FixedTxComplete_Cb = smp_tx_complete_callback;
 
     fixed_reg.pL2CA_FixedCong_Cb = NULL;    /* do not handle congestion on this channel */
-    fixed_reg.default_idle_tout  = 60;      /* set 60 seconds timeout, 0xffff default idle timeout */
-
+    fixed_reg.default_idle_tout  = 0;       /* set 0 seconds timeout, 0xffff default idle timeout.
+                                            This timeout is used to wait for the end of the pairing
+                                            and then make a disconnect request, setting a larger value
+                                            will cause the disconnect event to go back up for a long time.
+                                            Set to 0 will be disconnected directly, and it will come up
+                                            pairing failure, so it will not cause adverse effects. */
     L2CA_RegisterFixedChannel (L2CAP_SMP_CID, &fixed_reg);
-
+#if (CLASSIC_BT_INCLUDED == TRUE)
     fixed_reg.pL2CA_FixedConn_Cb = smp_br_connect_callback;
     fixed_reg.pL2CA_FixedData_Cb = smp_br_data_received;
 
     L2CA_RegisterFixedChannel (L2CAP_SMP_BR_CID, &fixed_reg);
+#endif  ///CLASSIC_BT_INCLUDED == TRUE
 }
 
 /*******************************************************************************
@@ -98,7 +105,10 @@ static void smp_connect_callback (UINT16 channel, BD_ADDR bd_addr, BOOLEAN conne
     if (transport == BT_TRANSPORT_BR_EDR || memcmp(bd_addr, dummy_bda, BD_ADDR_LEN) == 0) {
         return;
     }
-
+    if(!connected && &p_cb->rsp_timer_ent) {
+        //free timer
+        btu_free_timer(&p_cb->rsp_timer_ent);      
+    }
     if (memcmp(bd_addr, p_cb->pairing_bda, BD_ADDR_LEN) == 0) {
         SMP_TRACE_EVENT ("%s()  for pairing BDA: %08x%04x  Event: %s\n",
                          __FUNCTION__,
@@ -149,17 +159,18 @@ static void smp_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf)
     /* sanity check */
     if ((SMP_OPCODE_MAX < cmd) || (SMP_OPCODE_MIN > cmd)) {
         SMP_TRACE_WARNING( "Ignore received command with RESERVED code 0x%02x\n", cmd);
-        GKI_freebuf (p_buf);
+        osi_free (p_buf);
         return;
     }
 
     /* reject the pairing request if there is an on-going SMP pairing */
     if (SMP_OPCODE_PAIRING_REQ == cmd || SMP_OPCODE_SEC_REQ == cmd) {
-        if ((p_cb->state == SMP_STATE_IDLE) && (p_cb->br_state == SMP_BR_STATE_IDLE)) {
+        if ((p_cb->state == SMP_STATE_IDLE) && (p_cb->br_state == SMP_BR_STATE_IDLE) &&
+            !(p_cb->flags & SMP_PAIR_FLAGS_WE_STARTED_DD)) {
             p_cb->role = L2CA_GetBleConnRole(bd_addr);
             memcpy(&p_cb->pairing_bda[0], bd_addr, BD_ADDR_LEN);
         } else if (memcmp(&bd_addr[0], p_cb->pairing_bda, BD_ADDR_LEN)) {
-            GKI_freebuf (p_buf);
+            osi_free (p_buf);
             smp_reject_unexpected_pairing_command(bd_addr);
             return;
         }
@@ -187,7 +198,7 @@ static void smp_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf)
         smp_sm_event(p_cb, cmd, p);
     }
 
-    GKI_freebuf (p_buf);
+    osi_free (p_buf);
 }
 
 /*******************************************************************************
@@ -226,6 +237,7 @@ static void smp_tx_complete_callback (UINT16 cid, UINT16 num_pkt)
 **                      connected (conn = TRUE)/disconnected (conn = FALSE).
 **
 *******************************************************************************/
+#if (CLASSIC_BT_INCLUDED == TRUE)
 static void smp_br_connect_callback(UINT16 channel, BD_ADDR bd_addr, BOOLEAN connected,
                                     UINT16 reason, tBT_TRANSPORT transport)
 {
@@ -235,7 +247,7 @@ static void smp_br_connect_callback(UINT16 channel, BD_ADDR bd_addr, BOOLEAN con
     SMP_TRACE_EVENT ("%s", __func__);
 
     if (transport != BT_TRANSPORT_BR_EDR) {
-        SMP_TRACE_WARNING("%s is called on unexpected transport %d\n",
+        SMP_TRACE_EVENT ("%s is called on unexpected transport %d\n",
                           __func__, transport);
         return;
     }
@@ -288,7 +300,7 @@ static void smp_br_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf)
     /* sanity check */
     if ((SMP_OPCODE_MAX < cmd) || (SMP_OPCODE_MIN > cmd)) {
         SMP_TRACE_WARNING( "Ignore received command with RESERVED code 0x%02x", cmd);
-        GKI_freebuf(p_buf);
+        osi_free(p_buf);
         return;
     }
 
@@ -299,7 +311,7 @@ static void smp_br_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf)
             p_cb->smp_over_br = TRUE;
             memcpy(&p_cb->pairing_bda[0], bd_addr, BD_ADDR_LEN);
         } else if (memcmp(&bd_addr[0], p_cb->pairing_bda, BD_ADDR_LEN)) {
-            GKI_freebuf (p_buf);
+            osi_free (p_buf);
             smp_reject_unexpected_pairing_command(bd_addr);
             return;
         }
@@ -316,6 +328,8 @@ static void smp_br_data_received(UINT16 channel, BD_ADDR bd_addr, BT_HDR *p_buf)
         smp_br_state_machine_event(p_cb, cmd, p);
     }
 
-    GKI_freebuf (p_buf);
+    osi_free (p_buf);
 }
+#endif  /* CLASSIC_BT_INCLUDED == TRUE */
+
 #endif /* SMP_INCLUDED == TRUE */

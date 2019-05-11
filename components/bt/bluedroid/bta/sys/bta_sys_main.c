@@ -26,44 +26,42 @@
 // #include <assert.h>
 #include <string.h>
 
-#include "alarm.h"
-#include "thread.h"
-#include "btm_api.h"
-#include "bta_api.h"
-#include "bta_sys.h"
+#include "osi/alarm.h"
+#include "osi/thread.h"
+#include "stack/btm_api.h"
+#include "bta/bta_api.h"
+#include "bta/bta_sys.h"
 #include "bta_sys_int.h"
 
-#include "fixed_queue.h"
-#include "gki.h"
-#include "hash_map.h"
-#include "osi.h"
-#include "hash_functions.h"
-// #include "osi/include/log.h"
-// #include "osi/include/thread.h"
+#include "osi/fixed_queue.h"
+#include "osi/hash_map.h"
+#include "osi/osi.h"
+#include "osi/hash_functions.h"
 #if( defined BTA_AR_INCLUDED ) && (BTA_AR_INCLUDED == TRUE)
-#include "bta_ar_api.h"
+#include "bta/bta_ar_api.h"
 #endif
-#include "utl.h"
+#include "bta/utl.h"
+#include "osi/allocator.h"
+#include "osi/mutex.h"
 
 
 /* system manager control block definition */
 #if BTA_DYNAMIC_MEMORY == FALSE
 tBTA_SYS_CB bta_sys_cb;
+#else
+tBTA_SYS_CB *bta_sys_cb_ptr;
 #endif
 
-fixed_queue_t *btu_bta_alarm_queue;
 static hash_map_t *bta_alarm_hash_map;
 static const size_t BTA_ALARM_HASH_MAP_SIZE = 17;
-static pthread_mutex_t bta_alarm_lock;
+static osi_mutex_t bta_alarm_lock;
 // extern thread_t *bt_workqueue_thread;
 
 /* trace level */
 /* TODO Bluedroid - Hard-coded trace levels -  Needs to be configurable */
-UINT8 appl_trace_level = BT_TRACE_LEVEL_WARNING; //APPL_INITIAL_TRACE_LEVEL;
-UINT8 btif_trace_level = BT_TRACE_LEVEL_WARNING;
+UINT8 appl_trace_level = APPL_INITIAL_TRACE_LEVEL;
+UINT8 btif_trace_level = BTIF_INITIAL_TRACE_LEVEL;
 
-// Communication queue between btu_task and bta.
-extern fixed_queue_t *btu_bta_msg_queue;
 void btu_bta_alarm_ready(fixed_queue_t *queue);
 
 static const tBTA_SYS_REG bta_sys_hw_reg = {
@@ -77,7 +75,7 @@ typedef void (*tBTA_SYS_ACTION)(tBTA_SYS_HW_MSG *p_data);
 
 /* action function list */
 const tBTA_SYS_ACTION bta_sys_action[] = {
-    /* device manager local device API events - cf bta_sys.h for events */
+    /* device manager local device API events - cf bta/bta_sys.h for events */
     bta_sys_hw_api_enable,             /* 0  BTA_SYS_HW_API_ENABLE_EVT    */
     bta_sys_hw_evt_enabled,           /* 1  BTA_SYS_HW_EVT_ENABLED_EVT */
     bta_sys_hw_evt_stack_enabled,       /* 2  BTA_SYS_HW_EVT_STACK_ENABLED_EVT */
@@ -171,14 +169,10 @@ void bta_sys_init(void)
 {
     memset(&bta_sys_cb, 0, sizeof(tBTA_SYS_CB));
 
-    pthread_mutex_init(&bta_alarm_lock, NULL);
+    osi_mutex_new(&bta_alarm_lock);
 
     bta_alarm_hash_map = hash_map_new(BTA_ALARM_HASH_MAP_SIZE,
                                       hash_function_pointer, NULL, (data_free_fn)osi_alarm_free, NULL);
-    btu_bta_alarm_queue = fixed_queue_new(SIZE_MAX);
-
-    fixed_queue_register_dequeue(btu_bta_alarm_queue,
-                                 btu_bta_alarm_ready);
 
     appl_trace_level = APPL_INITIAL_TRACE_LEVEL;
 
@@ -196,9 +190,11 @@ void bta_sys_init(void)
 
 void bta_sys_free(void)
 {
-    fixed_queue_free(btu_bta_alarm_queue, NULL);
     hash_map_free(bta_alarm_hash_map);
-    pthread_mutex_destroy(&bta_alarm_lock);
+    osi_mutex_free(&bta_alarm_lock);
+#if BTA_DYNAMIC_MEMORY
+    FREE_AND_RESET(bta_sys_cb_ptr);
+#endif
 }
 
 /*******************************************************************************
@@ -267,14 +263,14 @@ void bta_sys_hw_btm_cback( tBTM_DEV_STATUS status )
     APPL_TRACE_DEBUG(" bta_sys_hw_btm_cback was called with parameter: %i" , status );
 
     /* send a message to BTA SYS */
-    if ((sys_event = (tBTA_SYS_HW_MSG *) GKI_getbuf(sizeof(tBTA_SYS_HW_MSG))) != NULL) {
+    if ((sys_event = (tBTA_SYS_HW_MSG *) osi_malloc(sizeof(tBTA_SYS_HW_MSG))) != NULL) {
         if (status == BTM_DEV_STATUS_UP) {
             sys_event->hdr.event = BTA_SYS_EVT_STACK_ENABLED_EVT;
         } else if (status == BTM_DEV_STATUS_DOWN) {
             sys_event->hdr.event = BTA_SYS_ERROR_EVT;
         } else {
             /* BTM_DEV_STATUS_CMD_TOUT is ignored for now. */
-            GKI_freebuf (sys_event);
+            osi_free (sys_event);
             sys_event = NULL;
         }
 
@@ -342,7 +338,7 @@ void bta_sys_hw_api_enable( tBTA_SYS_HW_MSG *p_sys_hw_msg )
         bta_sys_cb.sys_hw_module_active |=  ((UINT32)1 << p_sys_hw_msg->hw_module );
 
         tBTA_SYS_HW_MSG *p_msg;
-        if ((p_msg = (tBTA_SYS_HW_MSG *) GKI_getbuf(sizeof(tBTA_SYS_HW_MSG))) != NULL) {
+        if ((p_msg = (tBTA_SYS_HW_MSG *) osi_malloc(sizeof(tBTA_SYS_HW_MSG))) != NULL) {
             p_msg->hdr.event = BTA_SYS_EVT_ENABLED_EVT;
             p_msg->hw_module = p_sys_hw_msg->hw_module;
 
@@ -397,7 +393,7 @@ void bta_sys_hw_api_disable(tBTA_SYS_HW_MSG *p_sys_hw_msg)
         bta_sys_cb.state = BTA_SYS_HW_STOPPING;
 
         tBTA_SYS_HW_MSG *p_msg;
-        if ((p_msg = (tBTA_SYS_HW_MSG *) GKI_getbuf(sizeof(tBTA_SYS_HW_MSG))) != NULL) {
+        if ((p_msg = (tBTA_SYS_HW_MSG *) osi_malloc(sizeof(tBTA_SYS_HW_MSG))) != NULL) {
             p_msg->hdr.event = BTA_SYS_EVT_DISABLED_EVT;
             p_msg->hw_module = p_sys_hw_msg->hw_module;
 
@@ -503,7 +499,7 @@ void bta_sys_event(BT_HDR *p_msg)
     }
 
     if (freebuf) {
-        GKI_freebuf(p_msg);
+        osi_free(p_msg);
     }
 
 }
@@ -561,7 +557,7 @@ BOOLEAN bta_sys_is_register(UINT8 id)
 **
 ** Function         bta_sys_sendmsg
 **
-** Description      Send a GKI message to BTA.  This function is designed to
+** Description      Send a message to BTA.  This function is designed to
 **                  optimize sending of messages to BTA.  It is called by BTA
 **                  API functions and call-in functions.
 **
@@ -575,10 +571,8 @@ void bta_sys_sendmsg(void *p_msg)
     // there is a procedure in progress that can schedule a task via this
     // message queue. This causes |btu_bta_msg_queue| to get cleaned up before
     // it gets used here; hence we check for NULL before using it.
-    if (btu_bta_msg_queue) {
-        fixed_queue_enqueue(btu_bta_msg_queue, p_msg);
-        //ke_event_set(KE_EVENT_BTU_TASK_THREAD);
-        btu_task_post(SIG_BTU_WORK);
+    if (btu_task_post(SIG_BTU_BTA_MSG, p_msg,  TASK_POST_BLOCKING) != TASK_POST_SUCCESS) {
+        osi_free(p_msg);
     }
 }
 
@@ -597,9 +591,7 @@ void bta_alarm_cb(void *data)
     assert(data != NULL);
     TIMER_LIST_ENT *p_tle = (TIMER_LIST_ENT *)data;
 
-    fixed_queue_enqueue(btu_bta_alarm_queue, p_tle);
-
-    btu_task_post(SIG_BTU_WORK);
+    btu_task_post(SIG_BTU_BTA_ALARM, p_tle, TASK_POST_BLOCKING);
 }
 
 void bta_sys_start_timer(TIMER_LIST_ENT *p_tle, UINT16 type, INT32 timeout_ms)
@@ -607,15 +599,15 @@ void bta_sys_start_timer(TIMER_LIST_ENT *p_tle, UINT16 type, INT32 timeout_ms)
     assert(p_tle != NULL);
 
     // Get the alarm for this p_tle.
-    pthread_mutex_lock(&bta_alarm_lock);
+    osi_mutex_lock(&bta_alarm_lock, OSI_MUTEX_MAX_TIMEOUT);
     if (!hash_map_has_key(bta_alarm_hash_map, p_tle)) {
         hash_map_set(bta_alarm_hash_map, p_tle, osi_alarm_new("bta_sys", bta_alarm_cb, p_tle, 0));
     }
-    pthread_mutex_unlock(&bta_alarm_lock);
+    osi_mutex_unlock(&bta_alarm_lock);
 
     osi_alarm_t *alarm = hash_map_get(bta_alarm_hash_map, p_tle);
     if (alarm == NULL) {
-        LOG_ERROR("%s unable to create alarm.", __func__);
+        APPL_TRACE_ERROR("%s unable to create alarm.", __func__);
         return;
     }
 
@@ -636,10 +628,10 @@ bool hash_iter_ro_cb(hash_map_entry_t *hash_map_entry, void *context)
 UINT32 bta_sys_get_remaining_ticks(TIMER_LIST_ENT *p_target_tle)
 {
     period_ms_t remaining_ms = 0;
-    pthread_mutex_lock(&bta_alarm_lock);
+    osi_mutex_lock(&bta_alarm_lock, OSI_MUTEX_MAX_TIMEOUT);
     // Get the alarm for this p_tle
     hash_map_foreach(bta_alarm_hash_map, hash_iter_ro_cb, &remaining_ms);
-    pthread_mutex_unlock(&bta_alarm_lock);
+    osi_mutex_unlock(&bta_alarm_lock);
     return remaining_ms;
 }
 
@@ -659,10 +651,32 @@ void bta_sys_stop_timer(TIMER_LIST_ENT *p_tle)
 
     osi_alarm_t *alarm = hash_map_get(bta_alarm_hash_map, p_tle);
     if (alarm == NULL) {
-        LOG_DEBUG("%s expected alarm was not in bta alarm hash map.", __func__);
+        APPL_TRACE_DEBUG("%s expected alarm was not in bta alarm hash map.", __func__);
         return;
     }
     osi_alarm_cancel(alarm);
+}
+
+/*******************************************************************************
+**
+** Function         bta_sys_free_timer
+**
+** Description      Stop and free a BTA timer.
+**
+** Returns          void
+**
+*******************************************************************************/
+void bta_sys_free_timer(TIMER_LIST_ENT *p_tle)
+{
+    assert(p_tle != NULL);
+
+    osi_alarm_t *alarm = hash_map_get(bta_alarm_hash_map, p_tle);
+    if (alarm == NULL) {
+        APPL_TRACE_DEBUG("%s expected alarm was not in bta alarm hash map.", __func__);
+        return;
+    }
+    osi_alarm_cancel(alarm);
+    hash_map_erase(bta_alarm_hash_map, p_tle);
 }
 
 /*******************************************************************************

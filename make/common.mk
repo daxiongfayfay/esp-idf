@@ -2,6 +2,8 @@
 # and component makefiles (component_wrapper.mk)
 #
 
+PYTHON=$(call dequote,$(CONFIG_SDK_PYTHON))
+
 # Include project config makefile, if it exists.
 #
 # (Note that we only rebuild this makefile automatically for some
@@ -10,10 +12,16 @@ SDKCONFIG_MAKEFILE ?= $(abspath $(BUILD_DIR_BASE)/include/config/auto.conf)
 -include $(SDKCONFIG_MAKEFILE)
 export SDKCONFIG_MAKEFILE  # sub-makes (like bootloader) will reuse this path
 
+# BATCH_BUILD flag disables interactive terminal features, defaults to verbose build
+ifdef BATCH_BUILD
+V ?= 1
+endif
+
 #Handling of V=1/VERBOSE=1 flag
 #
 # if V=1, $(summary) does nothing and $(details) will echo extra details
 # if V is unset or not 1, $(summary) echoes a summary and $(details) does nothing
+VERBOSE ?=
 V ?= $(VERBOSE)
 ifeq ("$(V)","1")
 summary := @true
@@ -24,6 +32,10 @@ details := @true
 
 # disable echoing of commands, directory names
 MAKEFLAGS += --silent
+endif  # $(V)==1
+
+ifdef CONFIG_SDK_MAKE_WARN_UNDEFINED_VARIABLES
+MAKEFLAGS += --warn-undefined-variables
 endif
 
 # General make utilities
@@ -52,7 +64,7 @@ endef
 #
 # example $(call resolvepath,$(CONFIG_PATH),$(CONFIG_DIR))
 define resolvepath
-$(foreach dir,$(1),$(if $(filter /%,$(dir)),$(dir),$(subst //,/,$(2)/$(dir))))
+$(abspath $(foreach dir,$(1),$(if $(filter /%,$(dir)),$(dir),$(subst //,/,$(2)/$(dir)))))
 endef
 
 
@@ -67,4 +79,20 @@ endef
 # example $(call prereq_if_explicit,erase_flash)
 define prereq_if_explicit
 $(filter $(1),$(MAKECMDGOALS))
+endef
+
+# macro to kill duplicate items in a list without messing up the sort order of the list.
+# Will only keep the unique items; if there are non-unique items in the list, it will remove
+# the later recurring ones so only the first one remains.
+# Copied from http://stackoverflow.com/questions/16144115/makefile-remove-duplicate-words-without-sorting
+define uniq
+$(if $1,$(firstword $1) $(call uniq,$(filter-out $(firstword $1),$1)))
+endef
+
+# macro to strip leading ../s from a path
+# Given $(1) which is a directory, remove any leading ../s from it
+# (recursively keeps removing ../ until not found)
+# if the path contains nothing but ../.., a single . is returned (cwd)
+define stripLeadingParentDirs
+$(foreach path,$(1),$(if $(subst ..,,$(path)),$(if $(filter ../%,$(path)),$(call stripLeadingParentDirs,$(patsubst ../%,%,$(path))),$(path)),.))
 endef

@@ -22,21 +22,24 @@
  *
  *****************************************************************************/
 
-#include "bt_target.h"
-#include "gki.h"
+#include "common/bt_target.h"
 
-#include "btm_api.h"
+#include "stack/btm_api.h"
 #include "btm_int.h"
-#include "rfcdefs.h"
-#include "port_api.h"
-#include "port_ext.h"
+#include "stack/rfcdefs.h"
+#include "stack/port_api.h"
+#include "stack/port_ext.h"
 #include "port_int.h"
 #include "rfc_int.h"
-#include "btu.h"
-#include "bt_defs.h"
+#include "stack/btu.h"
+#include "common/bt_defs.h"
+
+#include "osi/allocator.h"
+#include "osi/mutex.h"
 
 #include <string.h>
 
+#if (defined RFCOMM_INCLUDED && RFCOMM_INCLUDED == TRUE)
 /*******************************************************************************
 **
 ** Function         rfc_calc_fcs
@@ -165,12 +168,14 @@ tRFC_MCB *rfc_alloc_multiplexer_channel (BD_ADDR bd_addr, BOOLEAN is_initiator)
         p_mcb = &rfc_cb.port.rfc_mcb[j];
         if (rfc_cb.port.rfc_mcb[j].state == RFC_MX_STATE_IDLE) {
             /* New multiplexer control block */
+            fixed_queue_free(p_mcb->cmd_q, NULL);
+            rfc_timer_free(p_mcb);
             memset (p_mcb, 0, sizeof (tRFC_MCB));
             memcpy (p_mcb->bd_addr, bd_addr, BD_ADDR_LEN);
             RFCOMM_TRACE_DEBUG("rfc_alloc_multiplexer_channel:is_initiator:%d, create new p_mcb:%p, index:%d",
                                is_initiator, &rfc_cb.port.rfc_mcb[j], j);
 
-            GKI_init_q(&p_mcb->cmd_q);
+            p_mcb->cmd_q = fixed_queue_new(QUEUE_SIZE_MAX);
 
             p_mcb->is_initiator = is_initiator;
 
@@ -183,7 +188,9 @@ tRFC_MCB *rfc_alloc_multiplexer_channel (BD_ADDR bd_addr, BOOLEAN is_initiator)
     return (NULL);
 }
 
-
+void osi_free_fun(void *p){
+    osi_free(p);
+}
 /*******************************************************************************
 **
 ** Function         rfc_release_multiplexer_channel
@@ -194,13 +201,10 @@ tRFC_MCB *rfc_alloc_multiplexer_channel (BD_ADDR bd_addr, BOOLEAN is_initiator)
 *******************************************************************************/
 void rfc_release_multiplexer_channel (tRFC_MCB *p_mcb)
 {
-    void    *p_buf;
 
-    rfc_timer_stop (p_mcb);
+    rfc_timer_free (p_mcb);
 
-    while ((p_buf = GKI_dequeue(&p_mcb->cmd_q)) != NULL) {
-        GKI_freebuf(p_buf);
-    }
+    fixed_queue_free(p_mcb->cmd_q, osi_free_fun);
 
     memset (p_mcb, 0, sizeof (tRFC_MCB));
     p_mcb->state = RFC_MX_STATE_IDLE;
@@ -225,7 +229,6 @@ void rfc_timer_start (tRFC_MCB *p_mcb, UINT16 timeout)
     btu_start_timer (p_tle, BTU_TTYPE_RFCOMM_MFC, timeout);
 }
 
-
 /*******************************************************************************
 **
 ** Function         rfc_timer_stop
@@ -240,6 +243,20 @@ void rfc_timer_stop (tRFC_MCB *p_mcb)
     btu_stop_timer (&p_mcb->tle);
 }
 
+/*******************************************************************************
+**
+** Function         rfc_timer_free
+**
+** Description      Stop and free RFC Timer
+**
+*******************************************************************************/
+void rfc_timer_free (tRFC_MCB *p_mcb)
+{
+    RFCOMM_TRACE_EVENT ("rfc_timer_free");
+
+    btu_free_timer (&p_mcb->tle);
+    memset(&p_mcb->tle, 0, sizeof(TIMER_LIST_ENT));
+}
 
 /*******************************************************************************
 **
@@ -259,7 +276,6 @@ void rfc_port_timer_start (tPORT *p_port, UINT16 timeout)
     btu_start_timer (p_tle, BTU_TTYPE_RFCOMM_PORT, timeout);
 }
 
-
 /*******************************************************************************
 **
 ** Function         rfc_port_timer_stop
@@ -274,6 +290,20 @@ void rfc_port_timer_stop (tPORT *p_port)
     btu_stop_timer (&p_port->rfc.tle);
 }
 
+/*******************************************************************************
+**
+** Function         rfc_port_timer_free
+**
+** Description      Stop and free RFC Timer
+**
+*******************************************************************************/
+void rfc_port_timer_free (tPORT *p_port)
+{
+    RFCOMM_TRACE_EVENT ("rfc_port_timer_stop");
+
+    btu_free_timer (&p_port->rfc.tle);
+    memset(&p_port->rfc.tle, 0, sizeof(TIMER_LIST_ENT));
+}
 
 /*******************************************************************************
 **
@@ -457,12 +487,17 @@ void rfc_check_send_cmd(tRFC_MCB *p_mcb, BT_HDR *p_buf)
 
     /* if passed a buffer queue it */
     if (p_buf != NULL) {
-        GKI_enqueue(&p_mcb->cmd_q, p_buf);
+        if (p_mcb->cmd_q == NULL) {
+            RFCOMM_TRACE_ERROR("%s: empty queue: p_mcb = %p p_mcb->lcid = %u cached p_mcb = %p",
+                               __func__, p_mcb, p_mcb->lcid,
+                               rfc_find_lcid_mcb(p_mcb->lcid));
+        }
+        fixed_queue_enqueue(p_mcb->cmd_q, p_buf);
     }
 
     /* handle queue if L2CAP not congested */
     while (p_mcb->l2cap_congested == FALSE) {
-        if ((p = (BT_HDR *) GKI_dequeue(&p_mcb->cmd_q)) == NULL) {
+        if ((p = (BT_HDR *)fixed_queue_try_dequeue(p_mcb->cmd_q)) == NULL) {
             break;
         }
 
@@ -472,3 +507,4 @@ void rfc_check_send_cmd(tRFC_MCB *p_mcb, BT_HDR *p_buf)
 }
 
 
+#endif ///(defined RFCOMM_INCLUDED && RFCOMM_INCLUDED == TRUE)

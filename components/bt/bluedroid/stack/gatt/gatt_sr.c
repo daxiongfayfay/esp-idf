@@ -22,16 +22,52 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
-//#include "bt_utils.h"
+#include "common/bt_target.h"
+#include "osi/allocator.h"
 
-#if BLE_INCLUDED == TRUE
+#if BLE_INCLUDED == TRUE && GATTS_INCLUDED == TRUE
 #include <string.h>
 #include "gatt_int.h"
-#include "l2c_api.h"
+#include "stack/l2c_api.h"
 #include "l2c_int.h"
 #define GATT_MTU_REQ_MIN_LEN        2
 
+
+
+/*******************************************************************************
+**
+** Function         gatt_send_packet 
+**
+** Description      This function is called to send gatt packets directly
+
+**
+** Returns          status 
+**
+*******************************************************************************/
+tGATT_STATUS gatt_send_packet (tGATT_TCB *p_tcb, UINT8 *p_data, UINT16 len)
+{
+    BT_HDR          *p_msg = NULL;
+    UINT8           *p_m = NULL;
+    UINT16          buf_len;
+    tGATT_STATUS    status;
+
+    if (len > p_tcb->payload_size){
+        return  GATT_ILLEGAL_PARAMETER;
+    }
+
+    buf_len = (UINT16)(sizeof(BT_HDR) + p_tcb->payload_size + L2CAP_MIN_OFFSET);
+    if ((p_msg = (BT_HDR *)osi_malloc(buf_len)) == NULL) {
+        return GATT_NO_RESOURCES;
+    }
+
+    memset(p_msg, 0, buf_len);
+    p_msg->len = len;
+    p_m = (UINT8 *)(p_msg + 1) + L2CAP_MIN_OFFSET;
+    memcpy(p_m, p_data, len);
+
+    status = attp_send_sr_msg(p_tcb, p_msg);
+    return status;
+} 
 
 /*******************************************************************************
 **
@@ -98,12 +134,17 @@ void gatt_dequeue_sr_cmd (tGATT_TCB *p_tcb)
     if (p_tcb->sr_cmd.p_rsp_msg) {
         GATT_TRACE_ERROR("%s free msg %p", __func__, p_tcb->sr_cmd.p_rsp_msg);
 
-        GKI_freebuf (p_tcb->sr_cmd.p_rsp_msg);
+        osi_free(p_tcb->sr_cmd.p_rsp_msg);
+        p_tcb->sr_cmd.p_rsp_msg = NULL;
     }
 
-    while (GKI_getfirst(&p_tcb->sr_cmd.multi_rsp_q)) {
-        GKI_freebuf (GKI_dequeue (&p_tcb->sr_cmd.multi_rsp_q));
+    if (p_tcb->sr_cmd.multi_rsp_q) {
+        while (!fixed_queue_is_empty(p_tcb->sr_cmd.multi_rsp_q)) {
+            osi_free(fixed_queue_try_dequeue(p_tcb->sr_cmd.multi_rsp_q));
+        }
+        fixed_queue_free(p_tcb->sr_cmd.multi_rsp_q, NULL);
     }
+
     memset( &p_tcb->sr_cmd, 0, sizeof(tGATT_SR_CMD));
 }
 
@@ -119,36 +160,39 @@ void gatt_dequeue_sr_cmd (tGATT_TCB *p_tcb)
 static BOOLEAN process_read_multi_rsp (tGATT_SR_CMD *p_cmd, tGATT_STATUS status,
                                        tGATTS_RSP *p_msg, UINT16 mtu)
 {
-    tGATTS_RSP       *p_rsp = NULL;
     UINT16          ii, total_len, len;
-    BT_HDR          *p_buf = (BT_HDR *)GKI_getbuf((UINT16)sizeof(tGATTS_RSP));
     UINT8           *p;
     BOOLEAN         is_overflow = FALSE;
 
     GATT_TRACE_DEBUG ("process_read_multi_rsp status=%d mtu=%d", status, mtu);
 
+	if (p_cmd->multi_rsp_q == NULL) {
+        p_cmd->multi_rsp_q = fixed_queue_new(QUEUE_SIZE_MAX);
+	}
+
+    /* Enqueue the response */
+    BT_HDR  *p_buf = (BT_HDR *)osi_malloc(sizeof(tGATTS_RSP));
     if (p_buf == NULL) {
         p_cmd->status = GATT_INSUF_RESOURCE;
         return FALSE;
     }
-
-    /* Enqueue the response */
     memcpy((void *)p_buf, (const void *)p_msg, sizeof(tGATTS_RSP));
-    GKI_enqueue (&p_cmd->multi_rsp_q, p_buf);
+
+    fixed_queue_enqueue(p_cmd->multi_rsp_q, p_buf);
 
     p_cmd->status = status;
     if (status == GATT_SUCCESS) {
         GATT_TRACE_DEBUG ("Multi read count=%d num_hdls=%d",
-                          GKI_queue_length(&p_cmd->multi_rsp_q), p_cmd->multi_req.num_handles);
+                         fixed_queue_length(p_cmd->multi_rsp_q),
+                         p_cmd->multi_req.num_handles);
         /* Wait till we get all the responses */
-        if (GKI_queue_length(&p_cmd->multi_rsp_q) == p_cmd->multi_req.num_handles) {
+        if (fixed_queue_length(p_cmd->multi_rsp_q) == p_cmd->multi_req.num_handles) {
             len = sizeof(BT_HDR) + L2CAP_MIN_OFFSET + mtu;
-            if ((p_buf = (BT_HDR *)GKI_getbuf(len)) == NULL) {
+            if ((p_buf = (BT_HDR *)osi_calloc(len)) == NULL) {
                 p_cmd->status = GATT_INSUF_RESOURCE;
                 return (TRUE);
             }
 
-            memset(p_buf, 0, len);
             p_buf->offset = L2CAP_MIN_OFFSET;
             p = (UINT8 *)(p_buf + 1) + p_buf->offset;
 
@@ -157,11 +201,22 @@ static BOOLEAN process_read_multi_rsp (tGATT_SR_CMD *p_cmd, tGATT_STATUS status,
             p_buf->len = 1;
 
             /* Now walk through the buffers puting the data into the response in order */
+            list_t *list = NULL;
+            const list_node_t *node = NULL;
+            if (! fixed_queue_is_empty(p_cmd->multi_rsp_q)) {
+                list = fixed_queue_get_list(p_cmd->multi_rsp_q);
+			}
             for (ii = 0; ii < p_cmd->multi_req.num_handles; ii++) {
-                if (ii == 0) {
-                    p_rsp = (tGATTS_RSP *)GKI_getfirst (&p_cmd->multi_rsp_q);
-                } else {
-                    p_rsp = (tGATTS_RSP *)GKI_getnext (p_rsp);
+                tGATTS_RSP *p_rsp = NULL;
+                if (list != NULL) {
+                    if (ii == 0) {
+                        node = list_begin(list);
+                    } else {
+                        node = list_next(node);
+					}
+                    if (node != list_end(list)) {
+                        p_rsp = (tGATTS_RSP *)list_node(node);
+					}
                 }
 
                 if (p_rsp != NULL) {
@@ -204,10 +259,10 @@ static BOOLEAN process_read_multi_rsp (tGATT_SR_CMD *p_cmd, tGATT_STATUS status,
             if (p_buf->len == 0) {
                 GATT_TRACE_ERROR("process_read_multi_rsp - nothing found!!");
                 p_cmd->status = GATT_NOT_FOUND;
-                GKI_freebuf (p_buf);
-                GATT_TRACE_DEBUG(" GKI_freebuf (p_buf)");
+                osi_free (p_buf);
+                GATT_TRACE_DEBUG(" osi_free (p_buf)");
             } else if (p_cmd->p_rsp_msg != NULL) {
-                GKI_freebuf (p_buf);
+                osi_free (p_buf);
             } else {
                 p_cmd->p_rsp_msg = p_buf;
             }
@@ -239,7 +294,7 @@ tGATT_STATUS gatt_sr_process_app_rsp (tGATT_TCB *p_tcb, tGATT_IF gatt_if,
     tGATT_STATUS    ret_code = GATT_SUCCESS;
     UNUSED(trans_id);
 
-    GATT_TRACE_DEBUG("gatt_sr_process_app_rsp gatt_if=%d", gatt_if);
+    GATT_TRACE_DEBUG("gatt_sr_process_app_rsp gatt_if=%d\n", gatt_if);
 
     gatt_sr_update_cback_cnt(p_tcb, gatt_if, FALSE, FALSE);
 
@@ -264,7 +319,7 @@ tGATT_STATUS gatt_sr_process_app_rsp (tGATT_TCB *p_tcb, tGATT_IF gatt_if,
             if (p_tcb->sr_cmd.p_rsp_msg == NULL) {
                 p_tcb->sr_cmd.p_rsp_msg = attp_build_sr_msg (p_tcb, (UINT8)(op_code + 1), (tGATT_SR_MSG *)p_msg);
             } else {
-                GATT_TRACE_ERROR("Exception!!! already has respond message");
+                GATT_TRACE_ERROR("Exception!!! already has respond message\n");
             }
         }
     }
@@ -273,13 +328,16 @@ tGATT_STATUS gatt_sr_process_app_rsp (tGATT_TCB *p_tcb, tGATT_IF gatt_if,
             ret_code = attp_send_sr_msg (p_tcb, p_tcb->sr_cmd.p_rsp_msg);
             p_tcb->sr_cmd.p_rsp_msg = NULL;
         } else {
+            if (p_tcb->sr_cmd.status == GATT_SUCCESS){
+                status = GATT_UNKNOWN_ERROR;
+            }
             ret_code = gatt_send_error_rsp (p_tcb, status, op_code, p_tcb->sr_cmd.handle, FALSE);
         }
 
         gatt_dequeue_sr_cmd(p_tcb);
     }
 
-    GATT_TRACE_DEBUG("gatt_sr_process_app_rsp ret_code=%d", ret_code);
+    GATT_TRACE_DEBUG("gatt_sr_process_app_rsp ret_code=%d\n", ret_code);
 
     return ret_code;
 }
@@ -300,7 +358,12 @@ void gatt_process_exec_write_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
     UINT32  trans_id = 0;
     tGATT_IF gatt_if;
     UINT16  conn_id;
-
+    UINT16  queue_num = 0;
+    BOOLEAN is_first = TRUE;
+    BOOLEAN is_prepare_write_valid = FALSE;
+    BOOLEAN is_need_dequeue_sr_cmd = FALSE;
+    tGATT_PREPARE_WRITE_RECORD *prepare_record = NULL;
+    tGATT_PREPARE_WRITE_QUEUE_DATA * queue_data = NULL;
     UNUSED(len);
 
 #if GATT_CONFORMANCE_TESTING == TRUE
@@ -319,11 +382,68 @@ void gatt_process_exec_write_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
     /* mask the flag */
     flag &= GATT_PREP_WRITE_EXEC;
 
+    prepare_record = &(p_tcb->prepare_write_record);
+    queue_num = fixed_queue_length(prepare_record->queue);
 
-    /* no prep write is queued */
+    //if received prepare_write packets include stack_rsp and app_rsp, 
+    //stack respond to execute_write only when stack_rsp handle has invalid_offset
+    //or invalid_length error; 
+    //app need to respond to execute_write if it has received app_rsp handle packets
+    if (((prepare_record->error_code_app == GATT_SUCCESS) && 
+        (prepare_record->total_num == queue_num))
+        || (flag == GATT_PREP_WRITE_CANCEL)){
+        tGATT_EXEC_WRITE_RSP gatt_exec_write_rsp;
+        gatt_exec_write_rsp.op_code = GATT_RSP_EXEC_WRITE;
+        gatt_send_packet(p_tcb, (UINT8 *)(&gatt_exec_write_rsp), sizeof(gatt_exec_write_rsp)); 
+        gatt_dequeue_sr_cmd(p_tcb);
+        if (flag != GATT_PREP_WRITE_CANCEL){
+            is_prepare_write_valid = TRUE;
+        }
+        GATT_TRACE_DEBUG("Send execute_write_rsp\n");
+    } else if ((prepare_record->error_code_app == GATT_SUCCESS) && 
+        (prepare_record->total_num > queue_num)){
+        //No error for stack_rsp's handles and there exist some app_rsp's handles, 
+        //so exec_write_rsp depends to app's response; but stack_rsp's data is valid
+        //TODO: there exist problem if stack_rsp's data is valid but app_rsp's data is not valid.
+        is_prepare_write_valid = TRUE;
+    } else if(prepare_record->total_num < queue_num) {
+        GATT_TRACE_ERROR("Error in %s, line=%d, prepare write total number (%d) \
+                        should not smaller than prepare queue number (%d)\n", \
+                        __func__, __LINE__,prepare_record->total_num, queue_num); 
+    } else if (prepare_record->error_code_app != GATT_SUCCESS){
+        GATT_TRACE_DEBUG("Send error code for execute_write, code=0x%x\n", prepare_record->error_code_app);
+        is_need_dequeue_sr_cmd = (prepare_record->total_num == queue_num) ? TRUE : FALSE;
+        gatt_send_error_rsp(p_tcb, prepare_record->error_code_app, GATT_REQ_EXEC_WRITE, 0, is_need_dequeue_sr_cmd);
+    }
+
+    //dequeue prepare write data
+    while(fixed_queue_try_peek_first(prepare_record->queue)) {
+        queue_data = fixed_queue_dequeue(prepare_record->queue);
+        if (is_prepare_write_valid){
+            if((queue_data->p_attr->p_value != NULL) && (queue_data->p_attr->p_value->attr_val.attr_val != NULL)){
+                if(is_first) {
+                    //clear attr_val.attr_len before handle prepare write data
+                    queue_data->p_attr->p_value->attr_val.attr_len = 0;
+                    is_first = FALSE;
+                }
+                memcpy(queue_data->p_attr->p_value->attr_val.attr_val+queue_data->offset, queue_data->value, queue_data->len);
+                //don't forget to increase the attribute value length in the gatts database.
+                queue_data->p_attr->p_value->attr_val.attr_len += queue_data->len;
+            }
+        }
+        osi_free(queue_data);
+    }
+    fixed_queue_free(prepare_record->queue, NULL);
+    prepare_record->queue = NULL;
+
+    /* according to ble spec, even if there is no prep write queued, 
+     * need to respond execute_write_response
+     * Note: exec_write_rsp callback should be called after all data has been written*/
     if (!gatt_sr_is_prep_cnt_zero(p_tcb)) {
-        trans_id = gatt_sr_enqueue_cmd(p_tcb, op_code, 0);
-        gatt_sr_copy_prep_cnt_to_cback_cnt(p_tcb);
+        if (prepare_record->total_num > queue_num){
+            trans_id = gatt_sr_enqueue_cmd(p_tcb, op_code, 0);
+            gatt_sr_copy_prep_cnt_to_cback_cnt(p_tcb);
+        }
 
         for (i = 0; i < GATT_MAX_APPS; i++) {
             if (p_tcb->prep_cnt[i]) {
@@ -336,10 +456,10 @@ void gatt_process_exec_write_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
                 p_tcb->prep_cnt[i] = 0;
             }
         }
-    } else { /* nothing needs to be executed , send response now */
-        GATT_TRACE_ERROR("gatt_process_exec_write_req: no prepare write pending");
-        gatt_send_error_rsp(p_tcb, GATT_ERROR, GATT_REQ_EXEC_WRITE, 0, FALSE);
     }
+
+    prepare_record->total_num = 0;
+    prepare_record->error_code_app = GATT_SUCCESS;
 }
 
 /*******************************************************************************
@@ -371,7 +491,7 @@ void gatt_process_read_multi_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
 
 #if GATT_CONFORMANCE_TESTING == TRUE
     if (gatt_cb.enable_err_rsp && gatt_cb.req_op_code == op_code) {
-        GATT_TRACE_DEBUG("Conformance tst: forced err rspvofr ReadMultiple: error status=%d", gatt_cb.err_status);
+        GATT_TRACE_DEBUG("Conformance tst: forced err rspvofr ReadMultiple: error status=%d\n", gatt_cb.err_status);
 
         STREAM_TO_UINT16(handle, p);
 
@@ -418,7 +538,7 @@ void gatt_process_read_multi_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
             gatt_sr_reset_cback_cnt(p_tcb); /* read multiple use multi_rsp_q's count*/
 
             for (ll = 0; ll < p_tcb->sr_cmd.multi_req.num_handles; ll ++) {
-                if ((p_msg = (tGATTS_RSP *)GKI_getbuf(sizeof(tGATTS_RSP))) != NULL) {
+                if ((p_msg = (tGATTS_RSP *)osi_malloc(sizeof(tGATTS_RSP))) != NULL) {
                     memset(p_msg, 0, sizeof(tGATTS_RSP))
                     ;
                     handle = p_tcb->sr_cmd.multi_req.handles[ll];
@@ -437,11 +557,11 @@ void gatt_process_read_multi_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
                                                           key_size,
                                                           trans_id);
 
-                    if (err == GATT_SUCCESS) {
+                    if (err == GATT_SUCCESS || err == GATT_STACK_RSP) {
                         gatt_sr_process_app_rsp(p_tcb, gatt_cb.sr_reg[i_rcb].gatt_if , trans_id, op_code, GATT_SUCCESS, p_msg);
                     }
                     /* either not using or done using the buffer, release it now */
-                    GKI_freebuf(p_msg);
+                    osi_free(p_msg);
                 } else {
                     err = GATT_NO_RESOURCES;
                     gatt_dequeue_sr_cmd(p_tcb);
@@ -452,9 +572,8 @@ void gatt_process_read_multi_req (tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, U
             err = GATT_NO_RESOURCES;
         }
     }
-
     /* in theroy BUSY is not possible(should already been checked), protected check */
-    if (err != GATT_SUCCESS && err != GATT_PENDING && err != GATT_BUSY) {
+    if (err != GATT_SUCCESS && err != GATT_STACK_RSP && err != GATT_PENDING && err != GATT_BUSY) {
         gatt_send_error_rsp(p_tcb, err, op_code, handle, FALSE);
     }
 }
@@ -703,11 +822,10 @@ void gatts_process_primary_service_req(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 l
             }
 
             if (reason == GATT_SUCCESS) {
-                if ((p_msg =  (BT_HDR *)GKI_getbuf(msg_len)) == NULL) {
+                if ((p_msg =  (BT_HDR *)osi_calloc(msg_len)) == NULL) {
                     GATT_TRACE_ERROR("gatts_process_primary_service_req failed. no resources.");
                     reason = GATT_NO_RESOURCES;
                 } else {
-                    memset(p_msg, 0, msg_len);
                     reason = gatt_build_primary_service_rsp (p_msg, p_tcb, op_code, s_hdl, e_hdl, p_data, value);
                 }
             }
@@ -725,7 +843,7 @@ void gatts_process_primary_service_req(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 l
 
     if (reason != GATT_SUCCESS) {
         if (p_msg) {
-            GKI_freebuf(p_msg);
+            osi_free(p_msg);
         }
         gatt_send_error_rsp (p_tcb, reason, op_code, s_hdl, FALSE);
     } else {
@@ -758,12 +876,11 @@ static void gatts_process_find_info(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len,
     if (reason == GATT_SUCCESS) {
         buf_len = (UINT16)(sizeof(BT_HDR) + p_tcb->payload_size + L2CAP_MIN_OFFSET);
 
-        if ((p_msg =  (BT_HDR *)GKI_getbuf(buf_len)) == NULL) {
+        if ((p_msg =  (BT_HDR *)osi_calloc(buf_len)) == NULL) {
             reason = GATT_NO_RESOURCES;
         } else {
             reason = GATT_NOT_FOUND;
 
-            memset(p_msg, 0, buf_len);
             p = (UINT8 *)(p_msg + 1) + L2CAP_MIN_OFFSET;
             *p ++ = op_code + 1;
             p_msg->len = 2;
@@ -794,7 +911,7 @@ static void gatts_process_find_info(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len,
 
     if (reason != GATT_SUCCESS) {
         if (p_msg) {
-            GKI_freebuf(p_msg);
+            osi_free(p_msg);
         }
         gatt_send_error_rsp (p_tcb, reason, op_code, s_hdl, FALSE);
     } else {
@@ -831,15 +948,16 @@ static void gatts_process_mtu_req (tGATT_TCB *p_tcb, UINT16 len, UINT8 *p_data)
         /* mtu must be greater than default MTU which is 23/48 */
         if (mtu < GATT_DEF_BLE_MTU_SIZE) {
             p_tcb->payload_size = GATT_DEF_BLE_MTU_SIZE;
-        } else if (mtu > GATT_MAX_MTU_SIZE) {
-            p_tcb->payload_size = GATT_MAX_MTU_SIZE;
+        } else if (mtu > gatt_default.local_mtu) {
+            p_tcb->payload_size = gatt_default.local_mtu;
         } else {
             p_tcb->payload_size = mtu;
         }
 
-        GATT_TRACE_ERROR("MTU request PDU with MTU size %d\n", p_tcb->payload_size);
-
-        l2cble_set_fixed_channel_tx_data_length(p_tcb->peer_bda, L2CAP_ATT_CID, p_tcb->payload_size);
+        /* host will set packet data length to 251 automatically if remote device support set packet data length,
+            so l2cble_set_fixed_channel_tx_data_length() is not necessary.
+            l2cble_set_fixed_channel_tx_data_length(p_tcb->peer_bda, L2CAP_ATT_CID, p_tcb->payload_size);
+        */
 
         if ((p_buf = attp_build_sr_msg(p_tcb, GATT_RSP_MTU, (tGATT_SR_MSG *) &p_tcb->payload_size)) != NULL) {
             attp_send_sr_msg (p_tcb, p_buf);
@@ -871,7 +989,7 @@ static void gatts_process_mtu_req (tGATT_TCB *p_tcb, UINT16 len, UINT8 *p_data)
 **                  - discover characteristic by UUID
 **                  - relationship discovery
 **
-** Returns          void
+** Returns          void 
 **
 *******************************************************************************/
 void gatts_process_read_by_type_req(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len, UINT8 *p_data)
@@ -889,10 +1007,10 @@ void gatts_process_read_by_type_req(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len,
     tGATT_SRV_LIST_ELEM  *p_srv = NULL;
 
     reason = gatts_validate_packet_format(op_code, &len, &p_data, &uuid, &s_hdl, &e_hdl);
-
+    GATT_TRACE_DEBUG("%s, op_code =%x, len = %x\n", __func__, op_code, len);
 #if GATT_CONFORMANCE_TESTING == TRUE
     if (gatt_cb.enable_err_rsp && gatt_cb.req_op_code == op_code) {
-        GATT_TRACE_DEBUG("Conformance tst: forced err rsp for ReadByType: error status=%d", gatt_cb.err_status);
+        GATT_TRACE_DEBUG("Conformance tst: forced err rsp for ReadByType: error status=%d\n", gatt_cb.err_status);
 
         gatt_send_error_rsp (p_tcb, gatt_cb.err_status, gatt_cb.req_op_code, s_hdl, FALSE);
 
@@ -901,12 +1019,11 @@ void gatts_process_read_by_type_req(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len,
 #endif
 
     if (reason == GATT_SUCCESS) {
-        if ((p_msg =  (BT_HDR *)GKI_getbuf(msg_len)) == NULL) {
-            GATT_TRACE_ERROR("gatts_process_find_info failed. no resources.");
+        if ((p_msg =  (BT_HDR *)osi_calloc(msg_len)) == NULL) {
+            GATT_TRACE_ERROR("gatts_process_find_info failed. no resources.\n");
 
             reason = GATT_NO_RESOURCES;
         } else {
-            memset(p_msg, 0, msg_len);
             p = (UINT8 *)(p_msg + 1) + L2CAP_MIN_OFFSET;
 
             *p ++ = op_code + 1;
@@ -959,9 +1076,9 @@ void gatts_process_read_by_type_req(tGATT_TCB *p_tcb, UINT8 op_code, UINT16 len,
             p_msg->offset   = L2CAP_MIN_OFFSET;
         }
     }
-    if (reason != GATT_SUCCESS) {
+    if (reason != GATT_SUCCESS && reason != GATT_STACK_RSP) {
         if (p_msg) {
-            GKI_freebuf(p_msg);
+            osi_free(p_msg);
         }
 
         /* in theroy BUSY is not possible(should already been checked), protected check */
@@ -992,27 +1109,20 @@ void gatts_process_write_req (tGATT_TCB *p_tcb, UINT8 i_rcb, UINT16 handle,
     tGATT_STATUS    status;
     UINT8           sec_flag, key_size, *p = p_data;
     tGATT_SR_REG    *p_sreg;
-    UINT16          conn_id;
+    UINT16          conn_id, offset = 0;
 
     memset(&sr_data, 0, sizeof(tGATTS_DATA));
+    sr_data.write_req.need_rsp = FALSE;
 
     switch (op_code) {
-    case GATT_REQ_PREPARE_WRITE:
-        sr_data.write_req.is_prep = TRUE;
-        STREAM_TO_UINT16(sr_data.write_req.offset, p);
-        len -= 2;
-    /* fall through */
     case GATT_SIGN_CMD_WRITE:
         if (op_code == GATT_SIGN_CMD_WRITE) {
-            GATT_TRACE_DEBUG("Write CMD with data sigining" );
+            GATT_TRACE_DEBUG("Write CMD with data signing" );
             len -= GATT_AUTH_SIGN_LEN;
         }
     /* fall through */
     case GATT_CMD_WRITE:
     case GATT_REQ_WRITE:
-        if (op_code == GATT_REQ_WRITE || op_code == GATT_REQ_PREPARE_WRITE) {
-            sr_data.write_req.need_rsp = TRUE;
-        }
         sr_data.write_req.handle = handle;
         sr_data.write_req.len = len;
         if (len != 0 && p != NULL) {
@@ -1039,48 +1149,214 @@ void gatts_process_write_req (tGATT_TCB *p_tcb, UINT8 i_rcb, UINT16 handle,
         if ((trans_id = gatt_sr_enqueue_cmd(p_tcb, op_code, handle)) != 0) {
             p_sreg = &gatt_cb.sr_reg[i_rcb];
             conn_id = GATT_CREATE_CONN_ID(p_tcb->tcb_idx, p_sreg->gatt_if);
-            gatt_sr_send_req_callback(conn_id,
-                                      trans_id,
-                                      GATTS_REQ_TYPE_WRITE,
-                                      &sr_data);
+            status = gatts_write_attr_value_by_handle(gatt_cb.sr_reg[i_rcb].p_db,
+                    handle, offset, p, len);
+            if((op_code == GATT_REQ_WRITE) && (status == GATT_APP_RSP)){
+                sr_data.write_req.need_rsp = TRUE;
+                status = GATT_PENDING;
+            }
 
-            status = GATT_PENDING;
+            gatt_sr_send_req_callback(conn_id,
+                    trans_id,
+                    GATTS_REQ_TYPE_WRITE,
+                    &sr_data);
         } else {
-            GATT_TRACE_ERROR("max pending command, send error");
+            GATT_TRACE_ERROR("Error in %s, line=%d, max pending command, send error\n", __func__, __LINE__);
             status = GATT_BUSY; /* max pending command, application error */
         }
     }
 
-    /* in theroy BUSY is not possible(should already been checked), protected check */
-    if (status != GATT_PENDING && status != GATT_BUSY &&
-            (op_code == GATT_REQ_PREPARE_WRITE || op_code == GATT_REQ_WRITE)) {
-        gatt_send_error_rsp (p_tcb, status, op_code, handle, FALSE);
+    /* response should be sent only for write_request */
+    if ((op_code == GATT_REQ_WRITE) && (sr_data.write_req.need_rsp == FALSE)){
+        if (status == GATT_SUCCESS){
+            tGATT_WRITE_REQ_RSP gatt_write_req_rsp;
+            gatt_write_req_rsp.op_code = GATT_RSP_WRITE;                      
+            gatt_send_packet(p_tcb, (UINT8 *)(&gatt_write_req_rsp), sizeof(gatt_write_req_rsp)); 
+            gatt_dequeue_sr_cmd(p_tcb);
+        } else if (status != GATT_PENDING){
+            /* note: in case of GATT_BUSY, will respond this application error to remote device */
+            gatt_send_error_rsp (p_tcb, status, op_code, handle, TRUE);
+        }
     }
+
     return;
 }
 
+
 /*******************************************************************************
-**
-** Function         gatts_process_read_req
-**
-** Description      This function is called to process the read request
-**                  from client.
-**
-** Returns          void
-**
-*******************************************************************************/
+ **
+ ** Function         gatts_attr_process_preapre_write
+ **
+ ** Description      This function is called to process the prepare write request
+ **                  from client.
+ **
+ ** Returns          void
+ **
+ *******************************************************************************/
+void gatt_attr_process_prepare_write (tGATT_TCB *p_tcb, UINT8 i_rcb, UINT16 handle,
+                                     UINT8 op_code, UINT16 len, UINT8 *p_data)
+{
+    tGATT_STATUS status;
+    tGATT_PREPARE_WRITE_QUEUE_DATA * queue_data = NULL;
+    tGATT_ATTR16  *p_attr;
+    tGATT_ATTR16  *p_attr_temp;
+    tGATTS_DATA     sr_data;
+    UINT32          trans_id = 0; 
+    UINT8           sec_flag, key_size, *p = p_data;
+    tGATT_SR_REG    *p_sreg;
+    UINT16          conn_id, offset = 0;
+    tGATT_SVC_DB    *p_db; 
+    BOOLEAN is_need_prepare_write_rsp = FALSE;
+    BOOLEAN is_need_queue_data = FALSE;
+    tGATT_PREPARE_WRITE_RECORD *prepare_record = NULL;
+    memset(&sr_data, 0, sizeof(tGATTS_DATA));
+
+    if (len < 2) {
+        GATT_TRACE_ERROR("%s: Prepare write request was invalid - missing offset, sending error response", __func__);
+        gatt_send_error_rsp(p_tcb, GATT_INVALID_PDU, op_code, handle, FALSE);
+        return;
+    }
+    //get offset from p_data
+    STREAM_TO_UINT16(offset, p);
+    len -= 2;
+    p_sreg = &gatt_cb.sr_reg[i_rcb];
+    conn_id = GATT_CREATE_CONN_ID(p_tcb->tcb_idx, p_sreg->gatt_if);
+    //prepare_record = &(prepare_write_record);
+    prepare_record = &(p_tcb->prepare_write_record);
+
+    gatt_sr_get_sec_info(p_tcb->peer_bda,
+                         p_tcb->transport,
+                         &sec_flag,
+                         &key_size);
+
+    status = gatts_write_attr_perm_check (gatt_cb.sr_reg[i_rcb].p_db,
+                                          op_code,
+                                          handle,
+                                          sr_data.write_req.offset,
+                                          p,
+                                          len,
+                                          sec_flag,
+                                          key_size);
+
+    if (status == GATT_SUCCESS){
+        if ((trans_id = gatt_sr_enqueue_cmd(p_tcb, op_code, handle)) != 0) {
+            p_db = gatt_cb.sr_reg[i_rcb].p_db;
+            if (p_db && p_db->p_attr_list) {
+                p_attr = (tGATT_ATTR16 *)p_db->p_attr_list;
+                while (p_attr && handle >= p_attr->handle) {
+                    if (p_attr->handle == handle ) {
+                        p_attr_temp = p_attr;
+                        if (p_attr->control.auto_rsp == GATT_RSP_BY_APP) {
+                            status = GATT_APP_RSP;
+                        } else if (p_attr->p_value != NULL &&
+                            offset > p_attr->p_value->attr_val.attr_max_len) {
+                            status = GATT_INVALID_OFFSET; 
+                             is_need_prepare_write_rsp = TRUE;
+                             is_need_queue_data = TRUE;
+                        } else if (p_attr->p_value != NULL &&
+                            ((offset + len) > p_attr->p_value->attr_val.attr_max_len)){
+                            status = GATT_INVALID_ATTR_LEN;
+                            is_need_prepare_write_rsp = TRUE;
+                            is_need_queue_data = TRUE;
+                        } else if (p_attr->p_value == NULL) {
+                            GATT_TRACE_ERROR("Error in %s, attribute of handle 0x%x not allocate value buffer\n",
+                                        __func__, handle);
+                            status = GATT_UNKNOWN_ERROR;
+                        } else {
+                             //valid prepare write request, need to send response and queue the data
+                             //status: GATT_SUCCESS
+                             is_need_prepare_write_rsp = TRUE;
+                             is_need_queue_data = TRUE;
+                         }
+                    }
+                    p_attr = (tGATT_ATTR16 *)p_attr->p_next;
+                }
+            }
+        } else{
+            status = GATT_UNKNOWN_ERROR;
+            GATT_TRACE_ERROR("Error in %s, Line %d: GATT BUSY\n", __func__, __LINE__);
+        }
+    }
+
+    if (is_need_queue_data){
+        queue_data = (tGATT_PREPARE_WRITE_QUEUE_DATA *)osi_malloc(len + sizeof(tGATT_PREPARE_WRITE_QUEUE_DATA));
+        if (queue_data == NULL){
+            status = GATT_PREPARE_Q_FULL;
+        } else {
+            queue_data->p_attr = p_attr_temp;
+            queue_data->len = len;
+            queue_data->handle = handle;
+            queue_data->offset = offset;
+            memcpy(queue_data->value, p, len);
+            if (prepare_record->queue == NULL) {
+                prepare_record->queue = fixed_queue_new(QUEUE_SIZE_MAX);
+            }
+            fixed_queue_enqueue(prepare_record->queue, queue_data);
+        }
+    }
+    
+    if (is_need_prepare_write_rsp){
+        //send prepare write response
+        if (queue_data != NULL){
+            queue_data->op_code = op_code + 1;
+            //5: op_code 1 + handle 2 + offset 2
+            tGATT_STATUS rsp_send_status = gatt_send_packet(p_tcb, &(queue_data->op_code), queue_data->len + 5);
+            gatt_sr_update_prep_cnt(p_tcb, p_sreg->gatt_if, TRUE, FALSE);
+            gatt_dequeue_sr_cmd(p_tcb);
+            
+            if (rsp_send_status != GATT_SUCCESS){
+                GATT_TRACE_ERROR("Error in %s, line=%d, fail to send prepare_write_rsp, status=0x%x\n",
+                            __func__, __LINE__, rsp_send_status);
+            }
+        } else{
+            GATT_TRACE_ERROR("Error in %s, line=%d, queue_data should not be NULL here, fail to send prepare_write_rsp\n",
+                        __func__, __LINE__);
+        }
+    }
+
+    if ((status == GATT_APP_RSP) || (is_need_prepare_write_rsp)){ 
+        prepare_record->total_num++;
+        memset(&sr_data, 0, sizeof(sr_data));
+        sr_data.write_req.is_prep = TRUE;
+        sr_data.write_req.handle = handle;
+        sr_data.write_req.offset = offset;
+        sr_data.write_req.len = len;
+        sr_data.write_req.need_rsp = (status == GATT_APP_RSP) ? TRUE : FALSE;
+        memcpy(sr_data.write_req.value, p, len);
+        gatt_sr_send_req_callback(conn_id, trans_id, GATTS_REQ_TYPE_WRITE, &sr_data);
+    } else{
+        gatt_send_error_rsp(p_tcb, status, GATT_REQ_PREPARE_WRITE, handle, TRUE);
+    }
+
+    if ((prepare_record->error_code_app == GATT_SUCCESS) 
+            && ((status == GATT_INVALID_OFFSET) || (status == GATT_INVALID_ATTR_LEN))){
+            prepare_record->error_code_app = status;
+    }
+
+}
+
+/*******************************************************************************
+ **
+ ** Function         gatts_process_read_req
+ **
+ ** Description      This function is called to process the read request
+ **                  from client.
+ **
+ ** Returns          void
+ **
+ *******************************************************************************/
 static void gatts_process_read_req(tGATT_TCB *p_tcb, tGATT_SR_REG *p_rcb, UINT8 op_code,
                                    UINT16 handle, UINT16 len, UINT8 *p_data)
 {
-    UINT16          buf_len = (UINT16)(sizeof(BT_HDR) + p_tcb->payload_size + L2CAP_MIN_OFFSET);
-    tGATT_STATUS    reason;
-    BT_HDR          *p_msg = NULL;
-    UINT8           sec_flag, key_size, *p;
-    UINT16          offset = 0, value_len = 0;
+    UINT16       buf_len = (UINT16)(sizeof(BT_HDR) + p_tcb->payload_size + L2CAP_MIN_OFFSET);
+    tGATT_STATUS reason;
+    BT_HDR       *p_msg = NULL;
+    UINT8        sec_flag, key_size, *p;
+    UINT16       offset = 0, value_len = 0;
 
     UNUSED (len);
-    if ((p_msg =  (BT_HDR *)GKI_getbuf(buf_len)) == NULL) {
-        GATT_TRACE_ERROR("gatts_process_find_info failed. no resources.");
+    if ((p_msg =  (BT_HDR *)osi_calloc(buf_len)) == NULL) {
+        GATT_TRACE_ERROR("gatts_process_find_info failed. no resources.\n");
 
         reason = GATT_NO_RESOURCES;
     } else {
@@ -1088,7 +1364,6 @@ static void gatts_process_read_req(tGATT_TCB *p_tcb, tGATT_SR_REG *p_rcb, UINT8 
             STREAM_TO_UINT16(offset, p_data);
         }
 
-        memset(p_msg, 0, buf_len);
         p = (UINT8 *)(p_msg + 1) + L2CAP_MIN_OFFSET;
         *p ++ = op_code + 1;
         p_msg->len = 1;
@@ -1114,17 +1389,24 @@ static void gatts_process_read_req(tGATT_TCB *p_tcb, tGATT_SR_REG *p_rcb, UINT8 
         p_msg->len += value_len;
     }
 
-    if (reason != GATT_SUCCESS) {
+
+    if (reason != GATT_SUCCESS && reason != GATT_PENDING && reason != GATT_STACK_RSP) {
         if (p_msg) {
-            GKI_freebuf(p_msg);
+            osi_free(p_msg);
         }
 
         /* in theroy BUSY is not possible(should already been checked), protected check */
-        if (reason != GATT_PENDING && reason != GATT_BUSY) {
+        if (reason != GATT_BUSY) {
             gatt_send_error_rsp (p_tcb, reason, op_code, handle, FALSE);
+            gatt_dequeue_sr_cmd(p_tcb);
         }
-    } else {
+    } else if (reason == GATT_SUCCESS || reason == GATT_STACK_RSP) {
         attp_send_sr_msg(p_tcb, p_msg);
+        gatt_dequeue_sr_cmd(p_tcb);
+    } else {
+        if (p_msg) {
+            osi_free(p_msg);
+        }
     }
 
 }
@@ -1149,7 +1431,7 @@ void gatts_process_attribute_req (tGATT_TCB *p_tcb, UINT8 op_code,
     tGATT_ATTR16    *p_attr;
 
     if (len < 2) {
-        GATT_TRACE_ERROR("Illegal PDU length, discard request");
+        GATT_TRACE_ERROR("Illegal PDU length, discard request\n");
         status = GATT_INVALID_PDU;
     } else {
         STREAM_TO_UINT16(handle, p);
@@ -1159,7 +1441,7 @@ void gatts_process_attribute_req (tGATT_TCB *p_tcb, UINT8 op_code,
 #if GATT_CONFORMANCE_TESTING == TRUE
     gatt_cb.handle = handle;
     if (gatt_cb.enable_err_rsp && gatt_cb.req_op_code == op_code) {
-        GATT_TRACE_DEBUG("Conformance tst: forced err rsp: error status=%d", gatt_cb.err_status);
+        GATT_TRACE_DEBUG("Conformance tst: forced err rsp: error status=%d\n", gatt_cb.err_status);
 
         gatt_send_error_rsp (p_tcb, gatt_cb.err_status, gatt_cb.req_op_code, handle, FALSE);
 
@@ -1183,9 +1465,11 @@ void gatts_process_attribute_req (tGATT_TCB *p_tcb, UINT8 op_code,
                         case GATT_REQ_WRITE: /* write char/char descriptor value */
                         case GATT_CMD_WRITE:
                         case GATT_SIGN_CMD_WRITE:
-                        case GATT_REQ_PREPARE_WRITE:
                             gatts_process_write_req(p_tcb, i, handle, op_code, len, p);
                             break;
+                        
+                        case GATT_REQ_PREPARE_WRITE:
+                            gatt_attr_process_prepare_write (p_tcb, i, handle, op_code, len, p);
                         default:
                             break;
                         }
@@ -1242,7 +1526,8 @@ static void gatts_proc_srv_chg_ind_ack(tGATT_TCB *p_tcb )
 *******************************************************************************/
 static void gatts_chk_pending_ind(tGATT_TCB *p_tcb )
 {
-    tGATT_VALUE *p_buf = (tGATT_VALUE *)GKI_getfirst(&p_tcb->pending_ind_q);
+#if (GATTS_INCLUDED == TRUE)
+    tGATT_VALUE *p_buf = (tGATT_VALUE *)fixed_queue_try_peek_first(p_tcb->pending_ind_q);
     GATT_TRACE_DEBUG("gatts_chk_pending_ind");
 
     if (p_buf ) {
@@ -1250,8 +1535,10 @@ static void gatts_chk_pending_ind(tGATT_TCB *p_tcb )
                                      p_buf->handle,
                                      p_buf->len,
                                      p_buf->value);
-        GKI_freebuf(GKI_remove_from_queue (&p_tcb->pending_ind_q, p_buf));
+        osi_free(fixed_queue_try_remove_from_queue(p_tcb->pending_ind_q,
+                                                      p_buf));
     }
+#endif  ///GATTS_INCLUDED == TRUE
 }
 
 /*******************************************************************************
@@ -1308,8 +1595,10 @@ void gatts_process_value_conf(tGATT_TCB *p_tcb, UINT8 op_code)
                 if (p_rcb->in_use && p_rcb->s_hdl <= handle && p_rcb->e_hdl >= handle) {
                     trans_id = gatt_sr_enqueue_cmd(p_tcb, op_code, handle);
                     conn_id = GATT_CREATE_CONN_ID(p_tcb->tcb_idx, p_rcb->gatt_if);
+                    tGATTS_DATA p_data = {0};
+                    p_data.handle = handle;
                     gatt_sr_send_req_callback(conn_id,
-                                              trans_id, GATTS_REQ_TYPE_CONF, (tGATTS_DATA *)&handle);
+                                              trans_id, GATTS_REQ_TYPE_CONF, &p_data);
                 }
             }
         }
@@ -1350,24 +1639,24 @@ void gatt_server_handle_client_req (tGATT_TCB *p_tcb, UINT8 op_code,
         /* otherwise, ignore the pkt */
     } else {
         switch (op_code) {
-        case GATT_REQ_READ_BY_GRP_TYPE: /* discover primary services */
-        case GATT_REQ_FIND_TYPE_VALUE: /* discover service by UUID */
+        case GATT_REQ_READ_BY_GRP_TYPE:         /* discover primary services */
+        case GATT_REQ_FIND_TYPE_VALUE:          /* discover service by UUID */
             gatts_process_primary_service_req (p_tcb, op_code, len, p_data);
             break;
 
-        case GATT_REQ_FIND_INFO:/* discover char descrptor */
+        case GATT_REQ_FIND_INFO:                /* discover char descrptor */
             gatts_process_find_info(p_tcb, op_code, len, p_data);
             break;
 
-        case GATT_REQ_READ_BY_TYPE: /* read characteristic value, char descriptor value */
+        case GATT_REQ_READ_BY_TYPE:             /* read characteristic value, char descriptor value */
             /* discover characteristic, discover char by UUID */
             gatts_process_read_by_type_req(p_tcb, op_code, len, p_data);
             break;
 
 
-        case GATT_REQ_READ: /* read char/char descriptor value */
+        case GATT_REQ_READ:                     /* read char/char descriptor value */
         case GATT_REQ_READ_BLOB:
-        case GATT_REQ_WRITE: /* write char/char descriptor value */
+        case GATT_REQ_WRITE:                    /* write char/char descriptor value */
         case GATT_CMD_WRITE:
         case GATT_SIGN_CMD_WRITE:
         case GATT_REQ_PREPARE_WRITE:
@@ -1396,4 +1685,4 @@ void gatt_server_handle_client_req (tGATT_TCB *p_tcb, UINT8 op_code,
     }
 }
 
-#endif /* BLE_INCLUDED */
+#endif /* BLE_INCLUDED == TRUE && GATTS_INCLUDED == TRUE */

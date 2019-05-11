@@ -39,6 +39,15 @@ public:
         spi_flash_emulator_set(this);
     }
 
+    SpiFlashEmulator(const char *filename)
+    {
+        load(filename);
+        // Atleast one page should be free, hence we create mData of size of 2 sectors.
+        mData.resize(mData.size() + SPI_FLASH_SEC_SIZE / 4, 0xffffffff);
+        mUpperSectorBound = mData.size() * 4 / SPI_FLASH_SEC_SIZE;
+        spi_flash_emulator_set(this);
+    }
+
     ~SpiFlashEmulator()
     {
         spi_flash_emulator_set(nullptr);
@@ -148,10 +157,20 @@ public:
         fseek(f, 0, SEEK_END);
         off_t size = ftell(f);
         assert(size % SPI_FLASH_SEC_SIZE == 0);
-        mData.resize(size);
+        mData.resize(size / sizeof(uint32_t));
         fseek(f, 0, SEEK_SET);
         auto s = fread(mData.data(), SPI_FLASH_SEC_SIZE, size / SPI_FLASH_SEC_SIZE, f);
         assert(s == static_cast<size_t>(size / SPI_FLASH_SEC_SIZE));
+        fclose(f);
+    }
+    
+    void save(const char* filename)
+    {
+        FILE* f = fopen(filename, "wb");
+        auto n_sectors = mData.size() * sizeof(uint32_t) / SPI_FLASH_SEC_SIZE;
+        auto s = fwrite(mData.data(), SPI_FLASH_SEC_SIZE, n_sectors, f);
+        assert(s == n_sectors);
+        fclose(f);
     }
 
     void clearStats()

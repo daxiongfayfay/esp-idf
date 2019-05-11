@@ -15,37 +15,16 @@
 #ifndef _TCPIP_ADAPTER_H_
 #define _TCPIP_ADAPTER_H_
 
-/**
- * @brief TCPIP adapter library
- *
- * The aim of this adapter is to provide an abstract layer upon TCPIP stack.
- * With this layer, switch to other TCPIP stack is possible and easy in esp-idf.
- *
- * If users want to use other TCPIP stack, all those functions should be implemented
- * by using the specific APIs of that stack. The macros in CONFIG_TCPIP_LWIP should be
- * re-defined.
- *
- * tcpip_adapter_init should be called in the start of app_main for only once.
- *
- * Currently most adapter APIs are called in event_default_handlers.c.
- *
- * We recommend users only use set/get IP APIs, DHCP server/client APIs,
- * get free station list APIs in application side. Other APIs are used in esp-idf internal,
- * otherwise the state maybe wrong.
- *
- * TODO: ipv6 support will be added, use menuconfig to disable CONFIG_TCPIP_LWIP
- */
-
 #include <stdint.h>
-#include "rom/queue.h"
+#include "sys/queue.h"
 #include "esp_wifi_types.h"
-
-#define CONFIG_TCPIP_LWIP 1
-#define CONFIG_DHCP_STA_LIST 1
+#include "sdkconfig.h"
 
 #if CONFIG_TCPIP_LWIP
 #include "lwip/ip_addr.h"
-#include "apps/dhcpserver.h"
+#include "dhcpserver/dhcpserver.h"
+
+typedef dhcps_lease_t tcpip_adapter_dhcps_lease_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,190 +37,403 @@ extern "C" {
 
 #define IPSTR "%d.%d.%d.%d"
 
+#define IPV62STR(ipaddr) IP6_ADDR_BLOCK1(&(ipaddr)),     \
+    IP6_ADDR_BLOCK2(&(ipaddr)),     \
+    IP6_ADDR_BLOCK3(&(ipaddr)),     \
+    IP6_ADDR_BLOCK4(&(ipaddr)),     \
+    IP6_ADDR_BLOCK5(&(ipaddr)),     \
+    IP6_ADDR_BLOCK6(&(ipaddr)),     \
+    IP6_ADDR_BLOCK7(&(ipaddr)),     \
+    IP6_ADDR_BLOCK8(&(ipaddr))
+
+#define IPV6STR "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x"
+
+/** @brief IPV4 IP address information
+ */
 typedef struct {
-    ip4_addr_t ip;
-    ip4_addr_t netmask;
-    ip4_addr_t gw;
+    ip4_addr_t ip;      /**< Interface IPV4 address */
+    ip4_addr_t netmask; /**< Interface IPV4 netmask */
+    ip4_addr_t gw;      /**< Interface IPV4 gateway address */
 } tcpip_adapter_ip_info_t;
 
+/** @brief IPV6 IP address information
+ */
 typedef struct {
-    ip6_addr_t ip;
+    ip6_addr_t ip; /**< Interface IPV6 address */
 } tcpip_adapter_ip6_info_t;
 
-typedef dhcps_lease_t tcpip_adapter_dhcps_lease_t;
-
-#if CONFIG_DHCP_STA_LIST 
+/** @brief IP address info of station connected to WLAN AP
+ *
+ * @note See also wifi_sta_info_t (MAC layer information only)
+ */
 typedef struct {
-    uint8_t mac[6];
-    ip4_addr_t ip;
+    uint8_t mac[6]; /**< Station MAC address */
+    ip4_addr_t ip;  /**< Station assigned IP address */
 } tcpip_adapter_sta_info_t;
 
+/** @brief WLAN AP: Connected stations list
+ *
+ * Used to retrieve IP address information about connected stations.
+ */
 typedef struct {
-    tcpip_adapter_sta_info_t sta[ESP_WIFI_MAX_CONN_NUM];
-    int num;
+    tcpip_adapter_sta_info_t sta[ESP_WIFI_MAX_CONN_NUM]; /**< Connected stations */
+    int num; /**< Number of connected stations */
 } tcpip_adapter_sta_list_t;
-#endif
 
 #endif
 
-#define ESP_ERR_TCPIP_ADAPTER_BASE      0x5000      // TODO: move base address to esp_err.h
+#define ESP_ERR_TCPIP_ADAPTER_BASE                  0x5000
+#define ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS        ESP_ERR_TCPIP_ADAPTER_BASE + 0x01
+#define ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY          ESP_ERR_TCPIP_ADAPTER_BASE + 0x02
+#define ESP_ERR_TCPIP_ADAPTER_DHCPC_START_FAILED    ESP_ERR_TCPIP_ADAPTER_BASE + 0x03
+#define ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED  ESP_ERR_TCPIP_ADAPTER_BASE + 0x04
+#define ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED  ESP_ERR_TCPIP_ADAPTER_BASE + 0x05
+#define ESP_ERR_TCPIP_ADAPTER_NO_MEM                ESP_ERR_TCPIP_ADAPTER_BASE + 0x06
+#define ESP_ERR_TCPIP_ADAPTER_DHCP_NOT_STOPPED      ESP_ERR_TCPIP_ADAPTER_BASE + 0x07
 
-#define ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS        ESP_ERR_TCPIP_ADAPTER_BASE + 0x00
-#define ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY          ESP_ERR_TCPIP_ADAPTER_BASE + 0x01
-#define ESP_ERR_TCPIP_ADAPTER_DHCPC_START_FAILED    ESP_ERR_TCPIP_ADAPTER_BASE + 0x02
-#define ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED  ESP_ERR_TCPIP_ADAPTER_BASE + 0x03
-#define ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED  ESP_ERR_TCPIP_ADAPTER_BASE + 0x04
-#define ESP_ERR_TCPIP_ADAPTER_NO_MEM                ESP_ERR_TCPIP_ADAPTER_BASE + 0x05
-#define ESP_ERR_TCPIP_ADAPTER_DHCP_NOT_STOPPED      ESP_ERR_TCPIP_ADAPTER_BASE + 0x06
-
-/* TODO: add Ethernet interface */
+/* @brief On-chip network interfaces */
 typedef enum {
-    TCPIP_ADAPTER_IF_STA = 0,     /**< ESP32 station interface */
-    TCPIP_ADAPTER_IF_AP,          /**< ESP32 soft-AP interface */
-    TCPIP_ADAPTER_IF_ETH,     /**< ESP32 ethernet interface */
+    TCPIP_ADAPTER_IF_STA = 0,     /**< Wi-Fi STA (station) interface */
+    TCPIP_ADAPTER_IF_AP,          /**< Wi-Fi soft-AP interface */
+    TCPIP_ADAPTER_IF_ETH,         /**< Ethernet interface */
     TCPIP_ADAPTER_IF_MAX
 } tcpip_adapter_if_t;
 
-/* status of DHCP client or DHCP server */
+/** @brief Type of DNS server */
 typedef enum {
-    TCPIP_ADAPTER_DHCP_INIT = 0,    /**< DHCP client/server in initial state */
-    TCPIP_ADAPTER_DHCP_STARTED,     /**< DHCP client/server already been started */
-    TCPIP_ADAPTER_DHCP_STOPPED,     /**< DHCP client/server already been stopped */
+    TCPIP_ADAPTER_DNS_MAIN= 0,       /**< DNS main server address*/
+    TCPIP_ADAPTER_DNS_BACKUP,        /**< DNS backup server address (Wi-Fi STA and Ethernet only) */
+    TCPIP_ADAPTER_DNS_FALLBACK,      /**< DNS fallback server address (Wi-Fi STA and Ethernet only) */
+    TCPIP_ADAPTER_DNS_MAX
+} tcpip_adapter_dns_type_t;
+
+/** @brief DNS server info */
+typedef struct {
+    ip_addr_t ip; /**< IPV4 address of DNS server */
+} tcpip_adapter_dns_info_t;
+
+/** @brief Status of DHCP client or DHCP server */
+typedef enum {
+    TCPIP_ADAPTER_DHCP_INIT = 0,    /**< DHCP client/server is in initial state (not yet started) */
+    TCPIP_ADAPTER_DHCP_STARTED,     /**< DHCP client/server has been started */
+    TCPIP_ADAPTER_DHCP_STOPPED,     /**< DHCP client/server has been stopped */
     TCPIP_ADAPTER_DHCP_STATUS_MAX
 } tcpip_adapter_dhcp_status_t;
 
-/* set the option mode for DHCP client or DHCP server */
+/** @brief Mode for DHCP client or DHCP server option functions */
 typedef enum{
     TCPIP_ADAPTER_OP_START = 0,
-    TCPIP_ADAPTER_OP_SET,           /**< set option mode */
-    TCPIP_ADAPTER_OP_GET,           /**< get option mode */
+    TCPIP_ADAPTER_OP_SET,           /**< Set option */
+    TCPIP_ADAPTER_OP_GET,           /**< Get option */
     TCPIP_ADAPTER_OP_MAX
-} tcpip_adapter_option_mode_t;
+} tcpip_adapter_dhcp_option_mode_t;
 
+/* Deprecated name for tcpip_adapter_dhcp_option_mode_t, to remove after ESP-IDF V4.0 */
+typedef tcpip_adapter_dhcp_option_mode_t tcpip_adapter_option_mode_t;
+
+/** @brief Supported options for DHCP client or DHCP server */
 typedef enum{
-    TCPIP_ADAPTER_ROUTER_SOLICITATION_ADDRESS   = 32,   /**< solicitation router address */
-    TCPIP_ADAPTER_REQUESTED_IP_ADDRESS          = 50,   /**< request IP address pool */
-    TCPIP_ADAPTER_IP_ADDRESS_LEASE_TIME         = 51,   /**< request IP address lease time */
-    TCPIP_ADAPTER_IP_REQUEST_RETRY_TIME         = 52,   /**< request IP address retry counter */
-} tcpip_adapter_option_id_t;
+    TCPIP_ADAPTER_DOMAIN_NAME_SERVER            = 6,    /**< Domain name server */
+    TCPIP_ADAPTER_ROUTER_SOLICITATION_ADDRESS   = 32,   /**< Solicitation router address */
+    TCPIP_ADAPTER_REQUESTED_IP_ADDRESS          = 50,   /**< Request specific IP address */
+    TCPIP_ADAPTER_IP_ADDRESS_LEASE_TIME         = 51,   /**< Request IP address lease time */
+    TCPIP_ADAPTER_IP_REQUEST_RETRY_TIME         = 52,   /**< Request IP address retry counter */
+} tcpip_adapter_dhcp_option_id_t;
+
+/* Deprecated name for tcpip_adapter_dhcp_option_id_t, to remove after ESP-IDF V4.0 */
+typedef tcpip_adapter_dhcp_option_id_t tcpip_adapter_option_id_t;
+
+/** IP event declarations */
+typedef enum {
+    IP_EVENT_STA_GOT_IP,               /*!< ESP32 station got IP from connected AP */
+    IP_EVENT_STA_LOST_IP,              /*!< ESP32 station lost IP and the IP is reset to 0 */
+    IP_EVENT_AP_STAIPASSIGNED,         /*!< ESP32 soft-AP assign an IP to a connected station */
+    IP_EVENT_GOT_IP6,                  /*!< ESP32 station or ap or ethernet interface v6IP addr is preferred */
+    IP_EVENT_ETH_GOT_IP,               /*!< ESP32 ethernet got IP from connected AP */
+} ip_event_t;
+
+/** @brief IP event base declaration */
+ESP_EVENT_DECLARE_BASE(IP_EVENT);
+
+/** Event structure for IP_EVENT_STA_GOT_IP, IP_EVENT_ETH_GOT_IP events  */
+typedef struct {
+    tcpip_adapter_if_t if_index;        /*!< Interface for which the event is received */
+    tcpip_adapter_ip_info_t ip_info;    /*!< IP address, netmask, gatway IP address */
+    bool ip_changed;                    /*!< Whether the assigned IP has changed or not */
+} ip_event_got_ip_t;
+
+/** Event structure for IP_EVENT_GOT_IP6 event */
+typedef struct {
+    tcpip_adapter_if_t if_index;        /*!< Interface for which the event is received */
+    tcpip_adapter_ip6_info_t ip6_info;  /*!< IPv6 address of the interface */
+} ip_event_got_ip6_t;
+
+/** Event structure for IP_EVENT_AP_STAIPASSIGNED event */
+typedef struct {
+    ip4_addr_t ip; /*!< IP address which was assigned to the station */
+} ip_event_ap_staipassigned_t;
+
 
 /**
- * @brief  Initialize tcpip adpater
+ * @brief  Initialize the underlying TCP/IP stack
  *
- * This will initialize TCPIP stack inside.
+ * @note This function should be called exactly once from application code, when the application starts up.
  */
 void tcpip_adapter_init(void);
 
 /**
- * @brief  Start an interface with specific MAC and IP
+ * @brief  Cause the TCP/IP stack to start the Ethernet interface with specified MAC and IP
  *
- * softAP or station interface will be initialized, connect WiFi stack with TCPIP stack.
+ * @note This function should be called after the Ethernet MAC hardware is initialized. In the default configuration, application code does not need to call this function - it is called automatically by the default handler for the SYSTEM_EVENT_ETH_START event.
  *
- * For softAP interface, DHCP server will be started automatically.
+ * @param[in]  mac Set MAC address of this interface
+ * @param[in]  ip_info Set IP address of this interface
  *
- * @param[in]  tcpip_if: the interface which we will start
- * @param[in]  mac: set MAC address of this interface
- * @param[in]  ip_info: set IP address of this interface
- *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_NO_MEM
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_NO_MEM
  */
-esp_err_t tcpip_adapter_start(tcpip_adapter_if_t tcpip_if, uint8_t *mac, tcpip_adapter_ip_info_t *ip_info);
+esp_err_t tcpip_adapter_eth_start(uint8_t *mac, tcpip_adapter_ip_info_t *ip_info);
 
 /**
- * @brief  Stop an interface
+ * @brief  Cause the TCP/IP stack to start the Wi-Fi station interface with specified MAC and IP
  *
- * The interface will be cleanup in this API, if DHCP server/client are started, will be stopped.
  *
- * @param[in]  tcpip_if: the interface which will be started
+ * @note This function should be called after the Wi-Fi Station hardware is initialized. In the default configuration, application code does not need to call this function - it is called automatically by the default handler for the SYSTEM_EVENT_STA_START event.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
+ * @param[in]  mac Set MAC address of this interface
+ * @param[in]  ip_info Set IP address of this interface
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_NO_MEM
+ */
+esp_err_t tcpip_adapter_sta_start(uint8_t *mac, tcpip_adapter_ip_info_t *ip_info);
+
+/**
+ * @brief  Cause the TCP/IP stack to start the Wi-Fi AP interface with specified MAC and IP
+ *
+ * @note This function should be called after the Wi-Fi AP hardware is initialized. In the default configuration, application code does not need to call this function - it is called automatically by the default handler for the SYSTEM_EVENT_AP_START event.
+ *
+ * DHCP server will be started automatically when this function is called.
+ *
+ * @param[in]  mac Set MAC address of this interface
+ * @param[in]  ip_info Set IP address of this interface
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_NO_MEM
+ */
+esp_err_t tcpip_adapter_ap_start(uint8_t *mac, tcpip_adapter_ip_info_t *ip_info);
+
+/**
+ * @brief  Cause the TCP/IP stack to stop a network interface
+ *
+ * Causes TCP/IP stack to clean up this interface. This includes stopping the DHCP server or client, if they are started.
+ *
+ * @note This API is called by the default Wi-Fi and Ethernet event handlers if the underlying network driver reports that the
+ * interface has stopped.
+ *
+ * @note To stop an interface from application code, call the network-specific API (esp_wifi_stop() or esp_eth_stop()).
+ * The driver layer will then send a stop event and the event handler should call this API.
+ * Otherwise, the driver and MAC layer will remain started.
+ *
+ * @param[in]  tcpip_if Interface which will be stopped
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
  */
 esp_err_t tcpip_adapter_stop(tcpip_adapter_if_t tcpip_if);
 
 /**
- * @brief  Bring up an interface
+ * @brief  Cause the TCP/IP stack to bring up an interface
  *
- * Only station interface need to be brought up, since station interface will be shut down when disconnect.
+ * @note This function is called automatically by the default event handlers for the Wi-Fi Station and Ethernet interfaces,
+ * in response to the SYSTEM_EVENT_STA_CONNECTED and SYSTEM_EVENT_ETH_CONNECTED events, respectively.
  *
- * @param[in]  tcpip_if: the interface which will be up
+ * @note This function is not normally used with Wi-Fi AP interface. If the AP interface is started, it is up.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
+ * @param[in]  tcpip_if Interface to bring up
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
  */
 esp_err_t tcpip_adapter_up(tcpip_adapter_if_t tcpip_if);
 
 /**
- * @brief  Shut down an interface
+ * @brief Cause the TCP/IP stack to shutdown an interface
  *
- * Only station interface need to be shut down, since station interface will be brought up when connect.
+ * @note This function is called automatically by the default event handlers for the Wi-Fi Station and Ethernet interfaces,
+ * in response to the SYSTEM_EVENT_STA_DISCONNECTED and SYSTEM_EVENT_ETH_DISCONNECTED events, respectively.
  *
- * @param[in]  tcpip_if: the interface which will be down
+ * @note This function is not normally used with Wi-Fi AP interface. If the AP interface is stopped, it is down.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
+ * @param[in]  tcpip_if Interface to shutdown
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
  */
 esp_err_t tcpip_adapter_down(tcpip_adapter_if_t tcpip_if);
 
 /**
- * @brief  Get interface's IP information
+ * @brief  Get interface's IP address information
  *
- * There has an IP information copy in adapter library, if interface is up, get IP information from
- * interface, otherwise get from copy.
+ * If the interface is up, IP information is read directly from the TCP/IP stack.
  *
- * @param[in]   tcpip_if: the interface which we want to get IP information
- * @param[out]  ip_info: If successful, IP information will be returned in this argument.
+ * If the interface is down, IP information is read from a copy kept in the TCP/IP adapter
+ * library itself.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ * @param[in]   tcpip_if Interface to get IP information
+ * @param[out]  ip_info If successful, IP information will be returned in this argument.
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
  */
 esp_err_t tcpip_adapter_get_ip_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_ip_info_t *ip_info);
 
 /**
- * @brief  Set interface's IP information
+ * @brief  Set interface's IP address information
  *
- * There has an IP information copy in adapter library, if interface is up, also set interface's IP.
- * DHCP client/server should be stopped before set new IP information.
+ * This function is mainly used to set a static IP on an interface.
  *
- * This function is mainly used for setting static IP.
+ * If the interface is up, the new IP information is set directly in the TCP/IP stack.
  *
- * @param[in]  tcpip_if: the interface which we want to set IP information
- * @param[in]  ip_info: If successful, IP information will be returned in this argument.
+ * The copy of IP information kept in the TCP/IP adapter library is also updated (this
+ * copy is returned if the IP is queried while the interface is still down.)
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ * @note DHCP client/server must be stopped before setting new IP information.
+ *
+ * @note Calling this interface for the Wi-Fi STA or Ethernet interfaces may generate a
+ * SYSTEM_EVENT_STA_GOT_IP or SYSTEM_EVENT_ETH_GOT_IP event.
+ *
+ * @param[in] tcpip_if Interface to set IP information
+ * @param[in] ip_info IP information to set on the specified interface
+ *
+ * @return
+ *      - ESP_OK
+ *      - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *      - ESP_ERR_TCPIP_ADAPTER_DHCP_NOT_STOPPED If DHCP server or client is still running
  */
-esp_err_t tcpip_adapter_set_ip_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_ip_info_t *ip_info);
+esp_err_t tcpip_adapter_set_ip_info(tcpip_adapter_if_t tcpip_if, const tcpip_adapter_ip_info_t *ip_info);
 
 /**
- * @brief  create interface's linklocal IPv6 information
+ * @brief  Set DNS Server information
  *
- * @note this function will create a linklocal IPv6 address about input interface,
- *       if this address status changed to preferred, will call event call back ,
- *       notify user linklocal IPv6 address has been verified
+ * This function behaves differently for different interfaces:
  *
- * @param[in]  tcpip_if: the interface which we want to set IP information
+ * - For Wi-Fi Station interface and Ethernet interface, up to three types of DNS server can be set (in order of priority):
+ *   - Main DNS Server (TCPIP_ADAPTER_DNS_MAIN)
+ *   - Backup DNS Server (TCPIP_ADAPTER_DNS_BACKUP)
+ *   - Fallback DNS Server (TCPIP_ADAPTER_DNS_FALLBACK)
  *
+ *   If DHCP client is enabled, main and backup DNS servers will be updated automatically from the DHCP lease if the relevant DHCP options are set. Fallback DNS Server is never updated from the DHCP lease and is designed to be set via this API.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *   If DHCP client is disabled, all DNS server types can be set via this API only.
+ *
+ * - For Wi-Fi AP interface, the Main DNS Server setting is used by the DHCP server to provide a DNS Server option to DHCP clients (Wi-Fi stations).
+ *   - The default Main DNS server is the IP of the Wi-Fi AP interface itself.
+ *   - This function can override it by setting server type TCPIP_ADAPTER_DNS_MAIN.
+ *   - Other DNS Server types are not supported for the Wi-Fi AP interface.
+ *
+ * @param[in]  tcpip_if Interface to set DNS Server information
+ * @param[in]  type Type of DNS Server to set: TCPIP_ADAPTER_DNS_MAIN, TCPIP_ADAPTER_DNS_BACKUP, TCPIP_ADAPTER_DNS_FALLBACK
+ * @param[in]  dns  DNS Server address to set
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS invalid params
+ */
+esp_err_t tcpip_adapter_set_dns_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_dns_type_t type, tcpip_adapter_dns_info_t *dns);
+
+/**
+ * @brief  Get DNS Server information
+ *
+ * Return the currently configured DNS Server address for the specified interface and Server type.
+ *
+ * This may be result of a previous call to tcpip_adapter_set_dns_info(). If the interface's DHCP client is enabled,
+ * the Main or Backup DNS Server may be set by the current DHCP lease.
+ *
+ * @param[in]  tcpip_if Interface to get DNS Server information
+ * @param[in]  type Type of DNS Server to get: TCPIP_ADAPTER_DNS_MAIN, TCPIP_ADAPTER_DNS_BACKUP, TCPIP_ADAPTER_DNS_FALLBACK
+ * @param[out] dns  DNS Server result is written here on success
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS invalid params
+ */
+esp_err_t tcpip_adapter_get_dns_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_dns_type_t type, tcpip_adapter_dns_info_t *dns);
+
+/**
+ * @brief  Get interface's old IP information
+ *
+ * Returns an "old" IP address previously stored for the interface when the valid IP changed.
+ *
+ * If the IP lost timer has expired (meaning the interface was down for longer than the configured interval)
+ * then the old IP information will be zero.
+ *
+ * @param[in]   tcpip_if Interface to get old IP information
+ * @param[out]  ip_info If successful, IP information will be returned in this argument.
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ */
+esp_err_t tcpip_adapter_get_old_ip_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_ip_info_t *ip_info);
+
+/**
+ * @brief  Set interface old IP information
+ *
+ * This function is called from the DHCP client for the Wi-Fi STA and Ethernet interfaces, before a new IP is set. It is also called from the default handlers for the SYSTEM_EVENT_STA_CONNECTED and SYSTEM_EVENT_ETH_CONNECTED events.
+ *
+ * Calling this function stores the previously configured IP, which can be used to determine if the IP changes in the future.
+ *
+ * If the interface is disconnected or down for too long, the "IP lost timer" will expire (after the configured interval) and set the old IP information to zero.
+ *
+ * @param[in]  tcpip_if Interface to set old IP information
+ * @param[in]  ip_info Store the old IP information for the specified interface
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ */
+esp_err_t tcpip_adapter_set_old_ip_info(tcpip_adapter_if_t tcpip_if, const tcpip_adapter_ip_info_t *ip_info);
+
+
+/**
+ * @brief  Create interface link-local IPv6 address
+ *
+ * Cause the TCP/IP stack to create a link-local IPv6 address for the specified interface.
+ *
+ * This function also registers a callback for the specified interface, so that if the link-local address becomes verified as the preferred address then a SYSTEM_EVENT_GOT_IP6 event will be sent.
+ *
+ * @param[in]  tcpip_if Interface to create a link-local IPv6 address
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
  */
 esp_err_t tcpip_adapter_create_ip6_linklocal(tcpip_adapter_if_t tcpip_if);
 
 /**
- * @brief  get interface's linkloacl IPv6 information
+ * @brief  Get interface link-local IPv6 address
  *
- * There has an IPv6 information copy in adapter library, if interface is up,and IPv6 info
- * is preferred,it will get IPv6 linklocal IP successfully
+ * If the specified interface is up and a preferred link-local IPv6 address
+ * has been created for the interface, return a copy of it.
  *
- * @param[in]  tcpip_if: the interface which we want to set IP information
- * @param[in]  if_ip6: If successful, IPv6 information will be returned in this argument.
+ * @param[in]  tcpip_if Interface to get link-local IPv6 address
+ * @param[out] if_ip6 IPv6 information will be returned in this argument if successful.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ * @return
+ *      - ESP_OK
+ *      - ESP_FAIL If interface is down, does not have a link-local IPv6 address, or the link-local IPv6 address is not a preferred address.
  */
 esp_err_t tcpip_adapter_get_ip6_linklocal(tcpip_adapter_if_t tcpip_if, ip6_addr_t *if_ip6);
 
@@ -252,193 +444,290 @@ esp_err_t tcpip_adapter_set_mac(tcpip_adapter_if_t tcpip_if, uint8_t *mac);
 #endif
 
 /**
- * @brief  Get DHCP server's status
+ * @brief  Get DHCP Server status
  *
- * @param[in]   tcpip_if: the interface which we will get status of DHCP server
- * @param[out]  status: If successful, the status of DHCP server will be return in this argument.
+ * @param[in]   tcpip_if Interface to get status of DHCP server.
+ * @param[out]  status If successful, the status of the DHCP server will be returned in this argument.
  *
- * @return ESP_OK
+ * @return
+ *         - ESP_OK
  */
 esp_err_t tcpip_adapter_dhcps_get_status(tcpip_adapter_if_t tcpip_if, tcpip_adapter_dhcp_status_t *status);
 
 /**
- * @brief  Set or Get DHCP server's option
+ * @brief  Set or Get DHCP server option
  *
- * @param[in]  opt_op: option operate type, 1 for SET, 2 for GET.
- * @param[in]  opt_id: option index, 32 for ROUTER, 50 for IP POLL, 51 for LEASE TIME, 52 for REQUEST TIME
- * @param[in]  opt_val: option parameter
- * @param[in]  opt_len: option length
+ * @param[in] opt_op TCPIP_ADAPTER_OP_SET to set an option, TCPIP_ADAPTER_OP_GET to get an option.
+ * @param[in] opt_id Option index to get or set, must be one of the supported enum values.
+ * @param[inout] opt_val Pointer to the option parameter.
+ * @param[in] opt_len Length of the option parameter.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED
- *         ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED
+ *         - ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED
  */
-esp_err_t tcpip_adapter_dhcps_option(tcpip_adapter_option_mode_t opt_op, tcpip_adapter_option_id_t opt_id, void *opt_val, uint32_t opt_len);
+esp_err_t tcpip_adapter_dhcps_option(tcpip_adapter_dhcp_option_mode_t opt_op, tcpip_adapter_dhcp_option_id_t opt_id, void *opt_val, uint32_t opt_len);
 
 /**
  * @brief  Start DHCP server
  *
- * @note   Currently DHCP server is bind to softAP interface.
+ * @note   Currently DHCP server is only supported on the Wi-Fi AP interface.
  *
- * @param[in]  tcpip_if: the interface which we will start DHCP server
+ * @param[in]  tcpip_if Interface to start DHCP server. Must be TCPIP_ADAPTER_IF_AP.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED
  */
 esp_err_t tcpip_adapter_dhcps_start(tcpip_adapter_if_t tcpip_if);
 
 /**
  * @brief  Stop DHCP server
  *
- * @note   Currently DHCP server is bind to softAP interface.
+ * @note   Currently DHCP server is only supported on the Wi-Fi AP interface.
  *
- * @param[in]  tcpip_if: the interface which we will stop DHCP server
+ * @param[in]  tcpip_if Interface to stop DHCP server. Must be TCPIP_ADAPTER_IF_AP.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPED
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
+ * @return
+ *      - ESP_OK
+ *      - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *      - ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED
+ *      - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
  */
 esp_err_t tcpip_adapter_dhcps_stop(tcpip_adapter_if_t tcpip_if);
 
 /**
  * @brief  Get DHCP client status
  *
- * @param[in]  tcpip_if: the interface which we will get status of DHCP client
- * @param[out]  status: If successful, the status of DHCP client will be return in this argument.
+ * @param[in]  tcpip_if Interface to get status of DHCP client
+ * @param[out] status If successful, the status of DHCP client will be returned in this argument.
  *
- * @return ESP_OK
+ * @return
+ *         - ESP_OK
  */
 esp_err_t tcpip_adapter_dhcpc_get_status(tcpip_adapter_if_t tcpip_if, tcpip_adapter_dhcp_status_t *status);
 
 /**
  * @brief  Set or Get DHCP client's option
  *
- * @note   This function is not implement now.
+ * @note This function is not yet implemented
  *
- * @param[in]  opt_op: option operate type, 1 for SET, 2 for GET.
- * @param[in]  opt_id: option index, 32 for ROUTER, 50 for IP POLL, 51 for LEASE TIME, 52 for REQUEST TIME
- * @param[in]  opt_val: option parameter
- * @param[in]  opt_len: option length
+ * @param[in] opt_op TCPIP_ADAPTER_OP_SET to set an option, TCPIP_ADAPTER_OP_GET to get an option.
+ * @param[in] opt_id Option index to get or set, must be one of the supported enum values.
+ * @param[inout] opt_val Pointer to the option parameter.
+ * @param[in] opt_len Length of the option parameter.
  *
- * @return ESP_OK
+ * @return
+ *         - ESP_ERR_NOT_SUPPORTED (not implemented)
  */
-esp_err_t tcpip_adapter_dhcpc_option(tcpip_adapter_option_mode_t opt_op, tcpip_adapter_option_id_t opt_id, void *opt_val, uint32_t opt_len);
+esp_err_t tcpip_adapter_dhcpc_option(tcpip_adapter_dhcp_option_mode_t opt_op, tcpip_adapter_dhcp_option_id_t opt_id, void *opt_val, uint32_t opt_len);
 
 /**
- * @brief  Start DHCP client
+ * @brief Start DHCP client
  *
- * @note   Currently DHCP client is bind to station interface.
+ * @note DHCP Client is only supported for the Wi-Fi station and Ethernet interfaces.
  *
- * @param[in]  tcpip_if: the interface which we will start DHCP client
+ * @note The default event handlers for the SYSTEM_EVENT_STA_CONNECTED and SYSTEM_EVENT_ETH_CONNECTED events call this function.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED
- *         ESP_ERR_TCPIP_ADAPTER_DHCPC_START_FAILED
+ * @param[in]  tcpip_if Interface to start the DHCP client
+ *
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *         - ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STARTED
+ *         - ESP_ERR_TCPIP_ADAPTER_DHCPC_START_FAILED
  */
 esp_err_t tcpip_adapter_dhcpc_start(tcpip_adapter_if_t tcpip_if);
 
 /**
  * @brief  Stop DHCP client
  *
- * @note   Currently DHCP client is bind to station interface.
+ * @note DHCP Client is only supported for the Wi-Fi station and Ethernet interfaces.
  *
- * @param[in]  tcpip_if: the interface which we will stop DHCP client
+ * @note Calling tcpip_adapter_stop() or tcpip_adapter_down() will also stop the DHCP Client if it is running.
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
- *         ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPED
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
+ * @param[in] tcpip_if Interface to stop the DHCP client
+ *
+ * @return
+ *      - ESP_OK
+ *      - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ *      - ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED
+ *      - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY
  */
 esp_err_t tcpip_adapter_dhcpc_stop(tcpip_adapter_if_t tcpip_if);
 
-
-
+/**
+ * @brief  Receive an Ethernet frame from the Ethernet interface
+ *
+ * This function will automatically be installed by esp_eth_init(). The Ethernet driver layer will then call this function to forward frames to the TCP/IP stack.
+ *
+ * @note Application code does not usually need to use this function directly.
+ *
+ * @param[in]  buffer Received data
+ * @param[in]  len Length of the data frame
+ * @param[in]  eb Pointer to internal Wi-Fi buffer (ignored for Ethernet)
+ *
+ * @return
+ *         - ESP_OK
+ */
 esp_err_t tcpip_adapter_eth_input(void *buffer, uint16_t len, void *eb);
 
 /**
- * @brief  Get data from station interface
+ * @brief  Receive an 802.11 data frame from the Wi-Fi Station interface
  *
- * This function should be installed by esp_wifi_reg_rxcb, so WiFi packets will be forward to TCPIP stack.
+ * This function should be installed by calling esp_wifi_reg_rxcb(). The Wi-Fi driver layer will then call this function to forward frames to the TCP/IP stack.
  *
- * @param[in]  void *buffer: the received data point
- * @param[in]  uint16_t len: the received data length
- * @param[in]  void *eb: parameter
+ * @note Installation happens automatically in the default handler for the SYSTEM_EVENT_STA_CONNECTED event.
  *
- * @return ESP_OK
+ * @note Application code does not usually need to call this function directly.
+ *
+ * @param[in]  buffer Received data
+ * @param[in]  len Length of the data frame
+ * @param[in]  eb Pointer to internal Wi-Fi buffer
+ *
+ * @return
+ *         - ESP_OK
  */
 esp_err_t tcpip_adapter_sta_input(void *buffer, uint16_t len, void *eb);
 
 /**
- * @brief  Get data from softAP interface
+ * @brief  Receive an 802.11 data frame from the Wi-Fi AP interface
  *
- * This function should be installed by esp_wifi_reg_rxcb, so WiFi packets will be forward to TCPIP stack.
+ * This function should be installed by calling esp_wifi_reg_rxcb(). The Wi-Fi driver layer will then call this function to forward frames to the TCP/IP stack.
  *
- * @param[in]  void *buffer: the received data point
- * @param[in]  uint16_t len: the received data length
- * @param[in]  void *eb: parameter
+ * @note Installation happens automatically in the default handler for the SYSTEM_EVENT_AP_START event.
  *
- * @return ESP_OK
+ * @note Application code does not usually need to call this function directly.
+ *
+ * @param[in]  buffer Received data
+ * @param[in]  len Length of the data frame
+ * @param[in]  eb Pointer to internal Wi-Fi buffer
+ *
+ * @return
+ *         - ESP_OK
  */
 esp_err_t tcpip_adapter_ap_input(void *buffer, uint16_t len, void *eb);
 
 /**
- * @brief  Get WiFi interface index
+ * @brief  Get network interface index
  *
- * Get WiFi interface from TCPIP interface struct pointer.
+ * Get network interface from TCP/IP implementation-specific interface pointer.
  *
- * @param[in]  void *dev: adapter interface
+ * @param[in]  dev Implementation-specific TCP/IP stack interface pointer.
  *
- * @return ESP_IF_WIFI_STA
- *         ESP_IF_WIFI_AP
-           ESP_IF_ETH
- *         ESP_IF_MAX
+ * @return
+ *         - ESP_IF_WIFI_STA
+ *         - ESP_IF_WIFI_AP
+ *         - ESP_IF_ETH
+ *         - ESP_IF_MAX - invalid parameter
  */
 esp_interface_t tcpip_adapter_get_esp_if(void *dev);
 
 /**
- * @brief  Get the station information list
+ * @brief  Get IP information for stations connected to the Wi-Fi AP interface
  *
- * @param[in]   wifi_sta_list_t *wifi_sta_list: station list info
- * @param[out]  tcpip_adapter_sta_list_t *tcpip_sta_list: station list info
+ * @param[in]   wifi_sta_list Wi-Fi station info list, returned from esp_wifi_ap_get_sta_list()
+ * @param[out]  tcpip_sta_list IP layer station info list, corresponding to MAC addresses provided in wifi_sta_list
  *
- * @return ESP_OK
- *         ESP_ERR_TCPIP_ADAPTER_NO_MEM
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ * @return
+ *         - ESP_OK
+ *         - ESP_ERR_TCPIP_ADAPTER_NO_MEM
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
  */
-esp_err_t tcpip_adapter_get_sta_list(wifi_sta_list_t *wifi_sta_list, tcpip_adapter_sta_list_t *tcpip_sta_list);
+esp_err_t tcpip_adapter_get_sta_list(const wifi_sta_list_t *wifi_sta_list, tcpip_adapter_sta_list_t *tcpip_sta_list);
 
-#define TCPIP_HOSTNAME_MAX_SIZE    31
+#define TCPIP_HOSTNAME_MAX_SIZE    32
 /**
- * @brief  Set the hostname to the interface
+ * @brief  Set the hostname of an interface
  *
- * @param[in]   tcpip_if: the interface which we will set the hostname
- * @param[in]   hostname: the host name for set the interfce
+ * @param[in]   tcpip_if Interface to set the hostname
+ * @param[in]   hostname New hostname for the interface. Maximum length 32 bytes.
  *
- * @return ESP_OK:success
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY:interface status error
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS:parameter error
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY - interface status error
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS - parameter error
  */
 esp_err_t tcpip_adapter_set_hostname(tcpip_adapter_if_t tcpip_if, const char *hostname);
 
 /**
- * @brief  Get the hostname from the interface
+ * @brief  Get interface hostname.
  *
- * @param[in]   tcpip_if: the interface which we will get the hostname
- * @param[in]   hostname: the host name from the interfce
+ * @param[in]   tcpip_if Interface to get the hostname
+ * @param[out]   hostname Returns a pointer to the hostname. May be NULL if no hostname is set. If set non-NULL, pointer remains valid (and string may change if the hostname changes).
  *
- * @return ESP_OK:success
- *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY:interface status error
- *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS:parameter error
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY - interface status error
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS - parameter error
  */
 esp_err_t tcpip_adapter_get_hostname(tcpip_adapter_if_t tcpip_if, const char **hostname);
+
+/**
+ * @brief  Get the TCP/IP stack-specific interface that is assigned to a given interface
+ *
+ * @note For lwIP, this returns a pointer to a netif structure.
+ *
+ * @param[in]  tcpip_if Interface to get the implementation-specific interface
+ * @param[out] netif Pointer to the implementation-specific interface
+ *
+ * @return
+ *         - ESP_OK - success
+ *         - ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY - interface status error
+ *         - ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS - parameter error
+ */
+esp_err_t tcpip_adapter_get_netif(tcpip_adapter_if_t tcpip_if, void ** netif);
+
+/**
+ * @brief  Test if supplied interface is up or down
+ *
+ * @param[in]   tcpip_if Interface to test up/down status
+ *
+ * @return
+ *         - true - Interface is up
+ *         - false - Interface is down
+ */
+bool tcpip_adapter_is_netif_up(tcpip_adapter_if_t tcpip_if);
+
+
+/**
+ * @brief  Install default event handlers for Ethernet interface
+ * @return
+ *      - ESP_OK on success
+ *      - one of the errors from esp_event on failure
+ */
+esp_err_t tcpip_adapter_set_default_eth_handlers();
+
+/**
+ * @brief Uninstall default event handlers for Ethernet interface
+ * @return
+ *      - ESP_OK on success
+ *      - one of the errors from esp_event on failure
+ */
+esp_err_t tcpip_adapter_clear_default_eth_handlers();
+
+/**
+ * @brief  Install default event handlers for Wi-Fi interfaces (station and AP)
+ * @return
+ *      - ESP_OK on success
+ *      - one of the errors from esp_event on failure
+ */
+esp_err_t tcpip_adapter_set_default_wifi_handlers();
+
+/**
+ * @brief  Uninstall default event handlers for Wi-Fi interfaces (station and AP)
+ * @return
+ *      - ESP_OK on success
+ *      - one of the errors from esp_event on failure
+ */
+esp_err_t tcpip_adapter_clear_default_wifi_handlers();
+
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /*  _TCPIP_ADAPTER_H_ */
-

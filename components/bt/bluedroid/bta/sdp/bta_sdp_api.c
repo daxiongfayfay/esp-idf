@@ -22,15 +22,16 @@
  *
  ******************************************************************************/
 
-#include "bta_api.h"
-#include "bta_sys.h"
-#include "bta_sdp_api.h"
+#include "common/bt_target.h"
+#include "bta/bta_api.h"
+#include "bta/bta_sys.h"
+#include "bta/bta_sdp_api.h"
 #include "bta_sdp_int.h"
-#include "gki.h"
 #include <string.h>
-// #include "port_api.h"
-#include "sdp_api.h"
+#include "osi/allocator.h"
+#include "stack/sdp_api.h"
 
+#if defined(BTA_SDP_INCLUDED) && (BTA_SDP_INCLUDED == TRUE)
 /*****************************************************************************
 **  Constants
 *****************************************************************************/
@@ -67,7 +68,7 @@ tBTA_SDP_STATUS BTA_SdpEnable(tBTA_SDP_DM_CBACK *p_cback)
         bta_sys_register(BTA_ID_SDP, &bta_sdp_reg);
 
         if (p_cback &&
-                (p_buf = (tBTA_SDP_API_ENABLE *) GKI_getbuf(sizeof(tBTA_SDP_API_ENABLE))) != NULL) {
+                (p_buf = (tBTA_SDP_API_ENABLE *) osi_malloc(sizeof(tBTA_SDP_API_ENABLE))) != NULL) {
             p_buf->hdr.event = BTA_SDP_API_ENABLE_EVT;
             p_buf->p_cback = p_cback;
             bta_sys_sendmsg(p_buf);
@@ -96,7 +97,7 @@ tBTA_SDP_STATUS BTA_SdpSearch(BD_ADDR bd_addr, tSDP_UUID *uuid)
     tBTA_SDP_API_SEARCH *p_msg;
 
     APPL_TRACE_API("%s\n", __FUNCTION__);
-    if ((p_msg = (tBTA_SDP_API_SEARCH *)GKI_getbuf(sizeof(tBTA_SDP_API_SEARCH))) != NULL) {
+    if ((p_msg = (tBTA_SDP_API_SEARCH *)osi_malloc(sizeof(tBTA_SDP_API_SEARCH))) != NULL) {
         p_msg->hdr.event = BTA_SDP_API_SEARCH_EVT;
         bdcpy(p_msg->bd_addr, bd_addr);
         //p_msg->uuid = uuid;
@@ -126,7 +127,7 @@ tBTA_SDP_STATUS BTA_SdpCreateRecordByUser(void *user_data)
     tBTA_SDP_API_RECORD_USER *p_msg;
 
     APPL_TRACE_API("%s\n", __FUNCTION__);
-    if ((p_msg = (tBTA_SDP_API_RECORD_USER *)GKI_getbuf(sizeof(tBTA_SDP_API_RECORD_USER))) != NULL) {
+    if ((p_msg = (tBTA_SDP_API_RECORD_USER *)osi_malloc(sizeof(tBTA_SDP_API_RECORD_USER))) != NULL) {
         p_msg->hdr.event = BTA_SDP_API_CREATE_RECORD_USER_EVT;
         p_msg->user_data = user_data;
         bta_sys_sendmsg(p_msg);
@@ -154,7 +155,7 @@ tBTA_SDP_STATUS BTA_SdpRemoveRecordByUser(void *user_data)
     tBTA_SDP_API_RECORD_USER *p_msg;
 
     APPL_TRACE_API("%s\n", __FUNCTION__);
-    if ((p_msg = (tBTA_SDP_API_RECORD_USER *)GKI_getbuf(sizeof(tBTA_SDP_API_RECORD_USER))) != NULL) {
+    if ((p_msg = (tBTA_SDP_API_RECORD_USER *)osi_malloc(sizeof(tBTA_SDP_API_RECORD_USER))) != NULL) {
         p_msg->hdr.event = BTA_SDP_API_REMOVE_RECORD_USER_EVT;
         p_msg->user_data = user_data;
         bta_sys_sendmsg(p_msg);
@@ -165,3 +166,4 @@ tBTA_SDP_STATUS BTA_SdpRemoveRecordByUser(void *user_data)
 }
 
 
+#endif /* #if defined(BTA_SDP_INCLUDED) && (BTA_SDP_INCLUDED == TRUE) */

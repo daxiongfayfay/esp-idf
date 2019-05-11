@@ -119,11 +119,12 @@ typedef struct xEventGroupDefinition
 		UBaseType_t uxEventGroupNumber;
 	#endif
 
+	#if( ( configSUPPORT_STATIC_ALLOCATION == 1 ) && ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) )
+		uint8_t ucStaticallyAllocated; /*< Set to pdTRUE if the event group is statically allocated to ensure no attempt is made to free the memory. */
+	#endif
+
+	portMUX_TYPE eventGroupMux;		//Mutex required due to SMP
 } EventGroup_t;
-
-
-/* Again: one mux for all events. Maybe this can be made more granular. ToDo: look into that. -JD */
-static portMUX_TYPE xEventGroupMux = portMUX_INITIALIZER_UNLOCKED;
 
 
 /*-----------------------------------------------------------*/
@@ -140,24 +141,83 @@ static BaseType_t prvTestWaitCondition( const EventBits_t uxCurrentEventBits, co
 
 /*-----------------------------------------------------------*/
 
-EventGroupHandle_t xEventGroupCreate( void )
-{
-EventGroup_t *pxEventBits;
+#if( configSUPPORT_STATIC_ALLOCATION == 1 )
 
-	pxEventBits = pvPortMalloc( sizeof( EventGroup_t ) );
-	if( pxEventBits != NULL )
+	EventGroupHandle_t xEventGroupCreateStatic( StaticEventGroup_t *pxEventGroupBuffer )
 	{
-		pxEventBits->uxEventBits = 0;
-		vListInitialise( &( pxEventBits->xTasksWaitingForBits ) );
-		traceEVENT_GROUP_CREATE( pxEventBits );
-	}
-	else
-	{
-		traceEVENT_GROUP_CREATE_FAILED();
+	EventGroup_t *pxEventBits;
+
+		/* A StaticEventGroup_t object must be provided. */
+		configASSERT( pxEventGroupBuffer );
+
+		/* The user has provided a statically allocated event group - use it. */
+		pxEventBits = ( EventGroup_t * ) pxEventGroupBuffer; /*lint !e740 EventGroup_t and StaticEventGroup_t are guaranteed to have the same size and alignment requirement - checked by configASSERT(). */
+
+		if( pxEventBits != NULL )
+		{
+			pxEventBits->uxEventBits = 0;
+			vListInitialise( &( pxEventBits->xTasksWaitingForBits ) );
+
+			#if( configSUPPORT_DYNAMIC_ALLOCATION == 1 )
+			{
+				/* Both static and dynamic allocation can be used, so note that
+				this event group was created statically in case the event group
+				is later deleted. */
+				pxEventBits->ucStaticallyAllocated = pdTRUE;
+			}
+			#endif /* configSUPPORT_DYNAMIC_ALLOCATION */
+
+			vPortCPUInitializeMutex(&pxEventBits->eventGroupMux);
+
+			traceEVENT_GROUP_CREATE( pxEventBits );
+		}
+		else
+		{
+			traceEVENT_GROUP_CREATE_FAILED();
+		}
+
+		return ( EventGroupHandle_t ) pxEventBits;
 	}
 
-	return ( EventGroupHandle_t ) pxEventBits;
-}
+#endif /* configSUPPORT_STATIC_ALLOCATION */
+/*-----------------------------------------------------------*/
+
+#if( configSUPPORT_DYNAMIC_ALLOCATION == 1 )
+
+	EventGroupHandle_t xEventGroupCreate( void )
+	{
+	EventGroup_t *pxEventBits;
+
+		/* Allocate the event group. */
+		pxEventBits = ( EventGroup_t * ) pvPortMalloc( sizeof( EventGroup_t ) );
+
+		if( pxEventBits != NULL )
+		{
+			pxEventBits->uxEventBits = 0;
+			vListInitialise( &( pxEventBits->xTasksWaitingForBits ) );
+
+			#if( configSUPPORT_STATIC_ALLOCATION == 1 )
+			{
+				/* Both static and dynamic allocation can be used, so note this
+				event group was allocated statically in case the event group is
+				later deleted. */
+				pxEventBits->ucStaticallyAllocated = pdFALSE;
+			}
+			#endif /* configSUPPORT_STATIC_ALLOCATION */
+
+			vPortCPUInitializeMutex(&pxEventBits->eventGroupMux);
+
+			traceEVENT_GROUP_CREATE( pxEventBits );
+		}
+		else
+		{
+			traceEVENT_GROUP_CREATE_FAILED();
+		}
+
+		return ( EventGroupHandle_t ) pxEventBits;
+	}
+
+#endif /* configSUPPORT_DYNAMIC_ALLOCATION */
 /*-----------------------------------------------------------*/
 
 EventBits_t xEventGroupSync( EventGroupHandle_t xEventGroup, const EventBits_t uxBitsToSet, const EventBits_t uxBitsToWaitFor, TickType_t xTicksToWait )
@@ -176,6 +236,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 	#endif
 
 	vTaskSuspendAll();
+	taskENTER_CRITICAL(&pxEventBits->eventGroupMux);
 	{
 		uxOriginalBitValue = pxEventBits->uxEventBits;
 
@@ -217,6 +278,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 			}
 		}
 	}
+	taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
 	xAlreadyYielded = xTaskResumeAll();
 
 	if( xTicksToWait != ( TickType_t ) 0 )
@@ -239,7 +301,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 		if( ( uxReturn & eventUNBLOCKED_DUE_TO_BIT_SET ) == ( EventBits_t ) 0 )
 		{
 			/* The task timed out, just return the current event bit value. */
-			taskENTER_CRITICAL( &xEventGroupMux );
+			taskENTER_CRITICAL( &pxEventBits->eventGroupMux );
 			{
 				uxReturn = pxEventBits->uxEventBits;
 
@@ -256,7 +318,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 					mtCOVERAGE_TEST_MARKER();
 				}
 			}
-			taskEXIT_CRITICAL( &xEventGroupMux );
+			taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
 
 			xTimeoutOccurred = pdTRUE;
 		}
@@ -295,6 +357,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 	#endif
 
 	vTaskSuspendAll();
+	taskENTER_CRITICAL( &pxEventBits->eventGroupMux );
 	{
 		const EventBits_t uxCurrentEventBits = pxEventBits->uxEventBits;
 
@@ -361,6 +424,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 			traceEVENT_GROUP_WAIT_BITS_BLOCK( xEventGroup, uxBitsToWaitFor );
 		}
 	}
+	taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
 	xAlreadyYielded = xTaskResumeAll();
 
 	if( xTicksToWait != ( TickType_t ) 0 )
@@ -382,7 +446,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 
 		if( ( uxReturn & eventUNBLOCKED_DUE_TO_BIT_SET ) == ( EventBits_t ) 0 )
 		{
-			taskENTER_CRITICAL( &xEventGroupMux );
+			taskENTER_CRITICAL( &pxEventBits->eventGroupMux );
 			{
 				/* The task timed out, just return the current event bit value. */
 				uxReturn = pxEventBits->uxEventBits;
@@ -405,7 +469,7 @@ BaseType_t xTimeoutOccurred = pdFALSE;
 					mtCOVERAGE_TEST_MARKER();
 				}
 			}
-			taskEXIT_CRITICAL( &xEventGroupMux );
+			taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
 
 			/* Prevent compiler warnings when trace macros are not used. */
 			xTimeoutOccurred = pdFALSE;
@@ -434,7 +498,7 @@ EventBits_t uxReturn;
 	configASSERT( xEventGroup );
 	configASSERT( ( uxBitsToClear & eventEVENT_BITS_CONTROL_BYTES ) == 0 );
 
-	taskENTER_CRITICAL( &xEventGroupMux );
+	taskENTER_CRITICAL( &pxEventBits->eventGroupMux );
 	{
 		traceEVENT_GROUP_CLEAR_BITS( xEventGroup, uxBitsToClear );
 
@@ -445,7 +509,7 @@ EventBits_t uxReturn;
 		/* Clear the bits. */
 		pxEventBits->uxEventBits &= ~uxBitsToClear;
 	}
-	taskEXIT_CRITICAL( &xEventGroupMux );
+	taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
 
 	return uxReturn;
 }
@@ -498,7 +562,9 @@ BaseType_t xMatchFound = pdFALSE;
 
 	pxList = &( pxEventBits->xTasksWaitingForBits );
 	pxListEnd = listGET_END_MARKER( pxList ); /*lint !e826 !e740 The mini list structure is used as the list end to save RAM.  This is checked and valid. */
+
 	vTaskSuspendAll();
+	taskENTER_CRITICAL(&pxEventBits->eventGroupMux);
 	{
 		traceEVENT_GROUP_SET_BITS( xEventGroup, uxBitsToSet );
 
@@ -570,6 +636,7 @@ BaseType_t xMatchFound = pdFALSE;
 		bit was set in the control word. */
 		pxEventBits->uxEventBits &= ~uxBitsToClear;
 	}
+	taskEXIT_CRITICAL(&pxEventBits->eventGroupMux);
 	( void ) xTaskResumeAll();
 
 	return pxEventBits->uxEventBits;
@@ -578,10 +645,11 @@ BaseType_t xMatchFound = pdFALSE;
 
 void vEventGroupDelete( EventGroupHandle_t xEventGroup )
 {
-EventGroup_t *pxEventBits = ( EventGroup_t * ) xEventGroup;
-const List_t *pxTasksWaitingForBits = &( pxEventBits->xTasksWaitingForBits );
+	EventGroup_t *pxEventBits = ( EventGroup_t * ) xEventGroup;
+	const List_t *pxTasksWaitingForBits = &( pxEventBits->xTasksWaitingForBits );
 
 	vTaskSuspendAll();
+	taskENTER_CRITICAL( &pxEventBits->eventGroupMux );
 	{
 		traceEVENT_GROUP_DELETE( xEventGroup );
 
@@ -593,7 +661,29 @@ const List_t *pxTasksWaitingForBits = &( pxEventBits->xTasksWaitingForBits );
 			( void ) xTaskRemoveFromUnorderedEventList( pxTasksWaitingForBits->xListEnd.pxNext, eventUNBLOCKED_DUE_TO_BIT_SET );
 		}
 
-		vPortFree( pxEventBits );
+		#if( ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) && ( configSUPPORT_STATIC_ALLOCATION == 0 ) )
+		{
+			/* The event group can only have been allocated dynamically - free
+			it again. */
+			taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
+			vPortFree( pxEventBits );
+		}
+		#elif( ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) && ( configSUPPORT_STATIC_ALLOCATION == 1 ) )
+		{
+			/* The event group could have been allocated statically or
+			dynamically, so check before attempting to free the memory. */
+			if( pxEventBits->ucStaticallyAllocated == ( uint8_t ) pdFALSE )
+			{
+			    taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );   //Exit mux of event group before deleting it
+			    vPortFree( pxEventBits );
+			}
+			else
+			{
+			    taskEXIT_CRITICAL( &pxEventBits->eventGroupMux );
+			    mtCOVERAGE_TEST_MARKER();
+			}
+		}
+		#endif /* configSUPPORT_DYNAMIC_ALLOCATION */
 	}
 	( void ) xTaskResumeAll();
 }

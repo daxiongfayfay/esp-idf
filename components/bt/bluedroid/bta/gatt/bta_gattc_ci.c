@@ -22,17 +22,18 @@
  *
  ******************************************************************************/
 
-#include "bt_target.h"
+#include "common/bt_target.h"
 
-#if defined(BTA_GATT_INCLUDED) && (BTA_GATT_INCLUDED == TRUE)
+#if defined(GATTC_INCLUDED) && (GATTC_INCLUDED == TRUE)
 
 #include <string.h>
 
-#include "bta_api.h"
-#include "bta_sys.h"
-#include "bta_gattc_ci.h"
-#include "gki.h"
-#include "utl.h"
+#include "bta/bta_api.h"
+#include "bta/bta_sys.h"
+#include "bta/bta_gattc_ci.h"
+#include "bta/utl.h"
+#include "osi/allocator.h"
+
 
 /*******************************************************************************
 **
@@ -54,7 +55,7 @@ void bta_gattc_ci_cache_open(BD_ADDR server_bda, UINT16 evt, tBTA_GATT_STATUS st
     tBTA_GATTC_CI_EVT  *p_evt;
     UNUSED(server_bda);
 
-    if ((p_evt = (tBTA_GATTC_CI_EVT *) GKI_getbuf(sizeof(tBTA_GATTC_CI_EVT))) != NULL) {
+    if ((p_evt = (tBTA_GATTC_CI_EVT *) osi_malloc(sizeof(tBTA_GATTC_CI_EVT))) != NULL) {
         p_evt->hdr.event = evt;
         p_evt->hdr.layer_specific = conn_id;
 
@@ -86,7 +87,7 @@ void bta_gattc_ci_cache_load(BD_ADDR server_bda, UINT16 evt, UINT16 num_attr,
     tBTA_GATTC_CI_LOAD  *p_evt;
     UNUSED(server_bda);
 
-    if ((p_evt = (tBTA_GATTC_CI_LOAD *) GKI_getbuf(sizeof(tBTA_GATTC_CI_LOAD))) != NULL) {
+    if ((p_evt = (tBTA_GATTC_CI_LOAD *) osi_malloc(sizeof(tBTA_GATTC_CI_LOAD))) != NULL) {
         memset(p_evt, 0, sizeof(tBTA_GATTC_CI_LOAD));
 
         p_evt->hdr.event = evt;
@@ -125,7 +126,7 @@ void bta_gattc_ci_cache_save(BD_ADDR server_bda, UINT16 evt, tBTA_GATT_STATUS st
     tBTA_GATTC_CI_EVT  *p_evt;
     UNUSED(server_bda);
 
-    if ((p_evt = (tBTA_GATTC_CI_EVT *) GKI_getbuf(sizeof(tBTA_GATTC_CI_EVT))) != NULL) {
+    if ((p_evt = (tBTA_GATTC_CI_EVT *) osi_malloc(sizeof(tBTA_GATTC_CI_EVT))) != NULL) {
         p_evt->hdr.event = evt;
         p_evt->hdr.layer_specific = conn_id;
 
@@ -133,4 +134,4 @@ void bta_gattc_ci_cache_save(BD_ADDR server_bda, UINT16 evt, tBTA_GATT_STATUS st
         bta_sys_sendmsg(p_evt);
     }
 }
-#endif /* BTA_GATT_INCLUDED */
+#endif /* GATTC_INCLUDED */

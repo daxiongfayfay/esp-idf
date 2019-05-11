@@ -24,16 +24,16 @@
 
 #include <string.h>
 
-#include "bt_types.h"
-#include "hcimsgs.h"
-#include "btu.h"
+#include "stack/bt_types.h"
+#include "stack/hcimsgs.h"
+#include "stack/btu.h"
 #include "btm_int.h"
-#include "gap_api.h"
-#include "controller.h"
+#include "stack/gap_api.h"
+#include "device/controller.h"
 
 #if (defined BLE_INCLUDED && BLE_INCLUDED == TRUE)
 #include "btm_ble_int.h"
-#include "smp_api.h"
+#include "stack/smp_api.h"
 
 
 /*******************************************************************************
@@ -59,7 +59,29 @@ static void btm_gen_resolve_paddr_cmpl(tSMP_ENC *p)
         /* set it to controller */
         btsnd_hcic_ble_set_random_addr(p_cb->private_addr);
 
-        p_cb->own_addr_type = BLE_ADDR_RANDOM;
+        p_cb->exist_addr_bit |= BTM_BLE_GAP_ADDR_BIT_RESOLVABLE;
+        memcpy(p_cb->resolvale_addr, p_cb->private_addr, BD_ADDR_LEN);
+        if (p_cb->set_local_privacy_cback){
+            (*p_cb->set_local_privacy_cback)(BTM_SET_PRIVACY_SUCCESS);
+            p_cb->set_local_privacy_cback = NULL;
+        }
+
+        if (btm_cb.ble_ctr_cb.inq_var.adv_mode == BTM_BLE_ADV_ENABLE){
+            BTM_TRACE_DEBUG("Advertise with new resolvable private address, now.");
+            /**
+             * Restart advertising, using new resolvable private address
+             */
+            btm_ble_stop_adv();
+            btm_ble_start_adv();
+        }
+        if (btm_cb.ble_ctr_cb.inq_var.state == BTM_BLE_SCANNING){
+            BTM_TRACE_DEBUG("Scan with new resolvable private address, now.");
+            /**
+             * Restart scaning, using new resolvable private address
+             */
+            btm_ble_stop_scan();
+            btm_ble_start_scan();
+        }
 
         /* start a periodical timer to refresh random addr */
         btu_stop_timer_oneshot(&p_cb->raddr_timer_ent);
@@ -73,6 +95,10 @@ static void btm_gen_resolve_paddr_cmpl(tSMP_ENC *p)
     } else {
         /* random address set failure */
         BTM_TRACE_DEBUG("set random address failed");
+        if (p_cb->set_local_privacy_cback){
+            (*p_cb->set_local_privacy_cback)(BTM_SET_PRIVACY_FAIL);
+            p_cb->set_local_privacy_cback = NULL;
+        }
     }
 }
 /*******************************************************************************
@@ -193,7 +219,6 @@ void btm_gen_non_resolvable_private_addr (tBTM_BLE_ADDR_CBACK *p_cback, void *p)
 
 }
 
-#if SMP_INCLUDED == TRUE
 /*******************************************************************************
 **  Utility functions for Random address resolving
 *******************************************************************************/
@@ -207,6 +232,7 @@ void btm_gen_non_resolvable_private_addr (tBTM_BLE_ADDR_CBACK *p_cback, void *p)
 ** Returns          None.
 **
 *******************************************************************************/
+#if SMP_INCLUDED == TRUE
 static void btm_ble_resolve_address_cmpl(void)
 {
     tBTM_LE_RANDOM_CB   *p_mgnt_cb = &btm_cb.ble_ctr_cb.addr_mgnt_cb;
@@ -250,8 +276,10 @@ static BOOLEAN btm_ble_proc_resolve_x(tSMP_ENC *p)
             return TRUE;
         }
     }
+
     return FALSE;
 }
+#endif  ///SMP_INCLUDED == TRUE
 
 /*******************************************************************************
 **
@@ -265,13 +293,14 @@ static BOOLEAN btm_ble_proc_resolve_x(tSMP_ENC *p)
 *******************************************************************************/
 BOOLEAN btm_ble_init_pseudo_addr (tBTM_SEC_DEV_REC *p_dev_rec, BD_ADDR new_pseudo_addr)
 {
+#if (SMP_INCLUDED == TRUE)
     BD_ADDR dummy_bda = {0};
 
     if (memcmp(p_dev_rec->ble.pseudo_addr, dummy_bda, BD_ADDR_LEN) == 0) {
         memcpy(p_dev_rec->ble.pseudo_addr, new_pseudo_addr, BD_ADDR_LEN);
         return TRUE;
     }
-
+#endif  ///SMP_INCLUDED == TRUE
     return FALSE;
 }
 
@@ -287,7 +316,7 @@ BOOLEAN btm_ble_init_pseudo_addr (tBTM_SEC_DEV_REC *p_dev_rec, BD_ADDR new_pseud
 BOOLEAN btm_ble_addr_resolvable (BD_ADDR rpa, tBTM_SEC_DEV_REC *p_dev_rec)
 {
     BOOLEAN rt = FALSE;
-
+#if (SMP_INCLUDED == TRUE)
     if (!BTM_BLE_IS_RESOLVE_BDA(rpa)) {
         return rt;
     }
@@ -315,9 +344,11 @@ BOOLEAN btm_ble_addr_resolvable (BD_ADDR rpa, tBTM_SEC_DEV_REC *p_dev_rec)
             rt = TRUE;
         }
     }
+#endif  ///SMP_INCLUDED == TRUE
     return rt;
 }
 
+#if (BLE_INCLUDED == TRUE && SMP_INCLUDED == TRUE)
 /*******************************************************************************
 **
 ** Function         btm_ble_match_random_bda
@@ -331,7 +362,6 @@ BOOLEAN btm_ble_addr_resolvable (BD_ADDR rpa, tBTM_SEC_DEV_REC *p_dev_rec)
 *******************************************************************************/
 static BOOLEAN btm_ble_match_random_bda(UINT16 rec_index)
 {
-#if (BLE_INCLUDED == TRUE && SMP_INCLUDED == TRUE)
     /* use the 3 MSB of bd address as prand */
 
     tBTM_LE_RANDOM_CB *p_mgnt_cb = &btm_cb.ble_ctr_cb.addr_mgnt_cb;
@@ -364,8 +394,8 @@ static BOOLEAN btm_ble_match_random_bda(UINT16 rec_index)
         btm_ble_resolve_address_cmpl();
         return TRUE;
     }
-#endif
 }
+#endif ///BLE_INCLUDED == TRUE && SMP_INCLUDED == TRUE
 
 /*******************************************************************************
 **
@@ -379,6 +409,7 @@ static BOOLEAN btm_ble_match_random_bda(UINT16 rec_index)
 *******************************************************************************/
 void btm_ble_resolve_random_addr(BD_ADDR random_bda, tBTM_BLE_RESOLVE_CBACK *p_cback, void *p)
 {
+#if (SMP_INCLUDED == TRUE)
     tBTM_LE_RANDOM_CB   *p_mgnt_cb = &btm_cb.ble_ctr_cb.addr_mgnt_cb;
 
     BTM_TRACE_EVENT ("btm_ble_resolve_random_addr");
@@ -400,8 +431,10 @@ void btm_ble_resolve_random_addr(BD_ADDR random_bda, tBTM_BLE_RESOLVE_CBACK *p_c
     } else {
         (*p_cback)(NULL, p);
     }
-}
 #endif
+
+}
+
 
 /*******************************************************************************
 **  address mapping between pseudo address and real connection address
@@ -487,7 +520,7 @@ BOOLEAN btm_random_pseudo_to_identity_addr(BD_ADDR random_pseudo, UINT8 *p_stati
         if (p_dev_rec->ble.in_controller_list & BTM_RESOLVING_LIST_BIT) {
             * p_static_addr_type = p_dev_rec->ble.static_addr_type;
             memcpy(random_pseudo, p_dev_rec->ble.static_addr, BD_ADDR_LEN);
-            if (controller_get_interface()->supports_ble_privacy()) {
+            if (controller_get_interface()->supports_ble_privacy() && p_dev_rec->ble.ble_addr_type != BLE_ADDR_PUBLIC) {
                 *p_static_addr_type |= BLE_ADDR_TYPE_ID_BIT;
             }
             return TRUE;
@@ -581,7 +614,7 @@ void btm_ble_refresh_local_resolvable_private_addr(BD_ADDR pseudo_addr,
     BD_ADDR     dummy_bda = {0};
 
     if (p != NULL) {
-        if (btm_cb.ble_ctr_cb.privacy_mode != BTM_PRIVACY_NONE) {
+        if (btm_cb.ble_ctr_cb.addr_mgnt_cb.own_addr_type == BLE_ADDR_RANDOM) {
             p->conn_addr_type = BLE_ADDR_RANDOM;
             if (memcmp(local_rpa, dummy_bda, BD_ADDR_LEN)) {
                 memcpy(p->conn_addr, local_rpa, BD_ADDR_LEN);

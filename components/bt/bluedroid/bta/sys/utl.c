@@ -22,9 +22,9 @@
  *
  ******************************************************************************/
 #include <stddef.h>
-#include "utl.h"
-#include "gki.h"
-#include "btm_api.h"
+#include "bta/utl.h"
+#include "stack/btm_api.h"
+#include "osi/allocator.h"
 
 /*******************************************************************************
 **
@@ -143,7 +143,7 @@ UINT8 utl_itoa(UINT16 i, char *p_s)
 **
 ** Function         utl_freebuf
 **
-** Description      This function calls GKI_freebuf to free the buffer passed
+** Description      This function calls osi_free to free the buffer passed
 **                  in, if buffer pointer is not NULL, and also initializes
 **                  buffer pointer to NULL.
 **
@@ -154,7 +154,7 @@ UINT8 utl_itoa(UINT16 i, char *p_s)
 void utl_freebuf(void **p)
 {
     if (*p != NULL) {
-        GKI_freebuf(*p);
+        osi_free(*p);
         *p = NULL;
     }
 }
@@ -233,6 +233,37 @@ BOOLEAN utl_set_device_class(tBTA_UTL_COD *p_cod, UINT8 cmd)
     }
 
     return FALSE;
+}
+
+/*******************************************************************************
+**
+** Function         utl_get_device_class
+**
+** Description      This function get the local Device Class.
+**
+** Parameters:
+**                  p_cod   - Pointer to the device class to get to
+**
+**
+** Returns          TRUE if successful, Otherwise FALSE
+**
+*******************************************************************************/
+BOOLEAN utl_get_device_class(tBTA_UTL_COD *p_cod)
+{
+    UINT8 *dev;
+    UINT16 service;
+    UINT8  minor, major;
+
+    dev = BTM_ReadDeviceClass();
+    BTM_COD_SERVICE_CLASS( service, dev );
+    BTM_COD_MINOR_CLASS(minor, dev );
+    BTM_COD_MAJOR_CLASS(major, dev );
+
+    p_cod->minor = minor;
+    p_cod->major = major;
+    p_cod->service = service;
+
+    return TRUE;
 }
 
 /*******************************************************************************

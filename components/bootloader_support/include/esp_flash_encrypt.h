@@ -15,14 +15,19 @@
 #define __ESP32_FLASH_ENCRYPT_H
 
 #include <stdbool.h>
-#include <esp_err.h>
+#include "esp_attr.h"
+#include "esp_err.h"
+#ifndef BOOTLOADER_BUILD
 #include "esp_spi_flash.h"
+#endif
 #include "soc/efuse_reg.h"
 
-/* Support functions for flash encryption features.
-
-   Can be compiled as part of app or bootloader code.
-*/
+/**
+ * @file esp_partition.h
+ * @brief Support functions for flash encryption features
+ *
+ * Can be compiled as part of app or bootloader code.
+ */
 
 /** @brief Is flash encryption currently enabled in hardware?
  *
@@ -30,9 +35,17 @@
  *
  * @return true if flash encryption is enabled.
  */
-static inline bool esp_flash_encryption_enabled(void) {
+static inline /** @cond */ IRAM_ATTR /** @endcond */ bool esp_flash_encryption_enabled(void) {
     uint32_t flash_crypt_cnt = REG_GET_FIELD(EFUSE_BLK0_RDATA0_REG, EFUSE_RD_FLASH_CRYPT_CNT);
-    return __builtin_parity(flash_crypt_cnt) == 1;
+    /* __builtin_parity is in flash, so we calculate parity inline */
+    bool enabled = false;
+    while(flash_crypt_cnt) {
+        if (flash_crypt_cnt & 1) {
+            enabled = !enabled;
+        }
+        flash_crypt_cnt >>= 1;
+    }
+    return enabled;
 }
 
 /* @brief Update on-device flash encryption
@@ -72,6 +85,8 @@ static inline bool esp_flash_encryption_enabled(void) {
  * @note Take care not to power off the device while this function
  * is running, or the partition currently being encrypted will be lost.
  *
+ * @note RTC_WDT will reset while encryption operations will be performed (if RTC_WDT is configured).
+ *
  * @return ESP_OK if all operations succeeded, ESP_ERR_INVALID_STATE
  * if a fatal error occured during encryption of all partitions.
  */
@@ -80,6 +95,7 @@ esp_err_t esp_flash_encrypt_check_and_update(void);
 
 /** @brief Encrypt-in-place a block of flash sectors
  *
+ * @note This function resets RTC_WDT between operations with sectors.
  * @param src_addr Source offset in flash. Should be multiple of 4096 bytes.
  * @param data_length Length of data to encrypt in bytes. Will be rounded up to next multiple of 4096 bytes.
  *
@@ -87,5 +103,15 @@ esp_err_t esp_flash_encrypt_check_and_update(void);
  * if SPI flash fails, ESP_ERR_FLASH_OP_TIMEOUT if flash times out.
  */
 esp_err_t esp_flash_encrypt_region(uint32_t src_addr, size_t data_length);
+
+/** @brief Write protect FLASH_CRYPT_CNT
+ *
+ * Intended to be called as a part of boot process if flash encryption
+ * is enabled but secure boot is not used. This should protect against
+ * serial re-flashing of an unauthorised code in absence of secure boot.
+ *
+ * @return 
+ */
+void esp_flash_write_protect_crypt_cnt();
 
 #endif

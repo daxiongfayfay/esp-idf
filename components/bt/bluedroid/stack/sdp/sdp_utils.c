@@ -24,24 +24,23 @@
 
 #include <stdlib.h>
 #include <string.h>
-//#include <netinet/in.h>
-//#include <stdio.h>
 
-#include "bt_defs.h"
+#include "osi/allocator.h"
 
-#include "gki.h"
-#include "bt_types.h"
+#include "common/bt_defs.h"
 
-#include "l2cdefs.h"
-#include "hcidefs.h"
-#include "hcimsgs.h"
+#include "stack/bt_types.h"
 
-#include "sdp_api.h"
+#include "stack/l2cdefs.h"
+#include "stack/hcidefs.h"
+#include "stack/hcimsgs.h"
+
+#include "stack/sdp_api.h"
 #include "sdpint.h"
 
-#include "btu.h"
+#include "stack/btu.h"
 
-
+#if (SDP_INCLUDED == TRUE)
 static const UINT8  sdp_base_uuid[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
                                        0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB
                                       };
@@ -120,6 +119,7 @@ tCONN_CB *sdpu_allocate_ccb (void)
     /* Look through each connection control block for a free one */
     for (xx = 0, p_ccb = sdp_cb.ccb; xx < SDP_MAX_CONNECTIONS; xx++, p_ccb++) {
         if (p_ccb->con_state == SDP_STATE_IDLE) {
+            btu_free_timer(&p_ccb->timer_entry);
             memset (p_ccb, 0, sizeof (tCONN_CB));
 
             p_ccb->timer_entry.param = (UINT32) p_ccb;
@@ -144,8 +144,8 @@ tCONN_CB *sdpu_allocate_ccb (void)
 *******************************************************************************/
 void sdpu_release_ccb (tCONN_CB *p_ccb)
 {
-    /* Ensure timer is stopped */
-    btu_stop_timer (&p_ccb->timer_entry);
+    /* Ensure timer is stopped and released */
+    btu_free_timer(&p_ccb->timer_entry);
 
     /* Drop any response pointer we may be holding */
     p_ccb->con_state = SDP_STATE_IDLE;
@@ -157,7 +157,7 @@ void sdpu_release_ccb (tCONN_CB *p_ccb)
     if (p_ccb->rsp_list) {
         SDP_TRACE_DEBUG("releasing SDP rsp_list\n");
 
-        GKI_freebuf(p_ccb->rsp_list);
+        osi_free(p_ccb->rsp_list);
         p_ccb->rsp_list = NULL;
     }
 }
@@ -242,6 +242,7 @@ UINT8 *sdpu_build_attrib_entry (UINT8 *p_out, tSDP_ATTRIBUTE *p_attr)
         } else
 
 #endif /* 0xFFFF - 0xFF */
+        {
 #if (SDP_MAX_ATTR_LEN > 0xFF)
             if (p_attr->len > 0xFF) {
                 UINT8_TO_BE_STREAM (p_out, (p_attr->type << 3) | SIZE_IN_NEXT_WORD);
@@ -253,7 +254,7 @@ UINT8 *sdpu_build_attrib_entry (UINT8 *p_out, tSDP_ATTRIBUTE *p_attr)
                 UINT8_TO_BE_STREAM (p_out, (p_attr->type << 3) | SIZE_IN_NEXT_BYTE);
                 UINT8_TO_BE_STREAM (p_out, p_attr->len);
             }
-
+        }
         if (p_attr->value_ptr != NULL) {
             ARRAY_TO_BE_STREAM (p_out, p_attr->value_ptr, (int)p_attr->len);
         }
@@ -312,7 +313,7 @@ void sdpu_build_n_send_error (tCONN_CB *p_ccb, UINT16 trans_num, UINT16 error_co
                        error_code, p_ccb->connection_id);
 
     /* Get a buffer to use to build and send the packet to L2CAP */
-    if ((p_buf = (BT_HDR *)GKI_getpoolbuf (SDP_POOL_ID)) == NULL) {
+    if ((p_buf = (BT_HDR *)osi_malloc(SDP_DATA_BUF_SIZE)) == NULL) {
         SDP_TRACE_ERROR ("SDP - no buf for err msg\n");
         return;
     }
@@ -666,10 +667,10 @@ BOOLEAN sdpu_compare_uuid_arrays (UINT8 *p_uuid1, UINT32 len1, UINT8 *p_uuid2, U
         if (len1 == 2) {
             return ((p_uuid1[0] == p_uuid2[0]) && (p_uuid1[1] == p_uuid2[1]));
         }
-        if (len1 == 4)
+        if (len1 == 4) {
             return (  (p_uuid1[0] == p_uuid2[0]) && (p_uuid1[1] == p_uuid2[1])
                       && (p_uuid1[2] == p_uuid2[2]) && (p_uuid1[3] == p_uuid2[3]) );
-        else {
+        } else {
             return (memcmp (p_uuid1, p_uuid2, (size_t)len1) == 0);
         }
     } else if (len1 > len2) {
@@ -926,6 +927,7 @@ UINT16 sdpu_get_attrib_entry_len(tSDP_ATTRIBUTE *p_attr)
         } else
 
 #endif/* 0xFFFF - 0xFF */
+        {
 #if (SDP_MAX_ATTR_LEN > 0xFF)
             if (p_attr->len > 0xFF) {
                 len += 3;
@@ -935,6 +937,7 @@ UINT16 sdpu_get_attrib_entry_len(tSDP_ATTRIBUTE *p_attr)
             {
                 len += 2;
             }
+        }
         len += p_attr->len;
         return len;
     }
@@ -981,7 +984,7 @@ UINT8 *sdpu_build_partial_attrib_entry (UINT8 *p_out, tSDP_ATTRIBUTE *p_attr, UI
     size_t  len_to_copy;
     UINT16  attr_len;
 
-    if ((p_attr_buff = (UINT8 *) GKI_getbuf(sizeof(UINT8) * SDP_MAX_ATTR_LEN )) == NULL) {
+    if ((p_attr_buff = (UINT8 *) osi_malloc(sizeof(UINT8) * SDP_MAX_ATTR_LEN )) == NULL) {
         SDP_TRACE_ERROR("sdpu_build_partial_attrib_entry cannot get a buffer!\n");
         return NULL;
     }
@@ -997,7 +1000,7 @@ UINT8 *sdpu_build_partial_attrib_entry (UINT8 *p_out, tSDP_ATTRIBUTE *p_attr, UI
     p_out = &p_out[len_to_copy];
     *offset += len_to_copy;
 
-    GKI_freebuf(p_attr_buff);
+    osi_free(p_attr_buff);
     return p_out;
 }
 
@@ -1023,3 +1026,5 @@ void sdpu_uuid16_to_uuid128(UINT16 uuid16, UINT8 *p_uuid128)
     uuid16_bo = ntohs(uuid16);
     memcpy(p_uuid128 + 2, &uuid16_bo, sizeof(uint16_t));
 }
+
+#endif  ///SDP_INCLUDED == TRUE
