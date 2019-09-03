@@ -29,8 +29,8 @@ extern const uint8_t image_jpg_start[]   asm("_binary_image_jpg_start");
 extern const uint8_t image_jpg_end[]     asm("_binary_image_jpg_end");
 //Define the height and width of the jpeg file. Make sure this matches the actual jpeg
 //dimensions.
-#define IMAGE_W 336
-#define IMAGE_H 256
+#define IMAGE_W 240
+#define IMAGE_H 320
 
 
 const char *TAG="ImageDec";
@@ -107,7 +107,7 @@ esp_err_t decode_image(uint16_t ***pixels)
             goto err;
         }
     }
-
+	ESP_LOGD(TAG, "tianxin decodeer memery success");
     //Allocate the work space for the jpeg decoder.
     work=calloc(WORKSZ, 1);
     if (work==NULL) {
@@ -122,7 +122,8 @@ esp_err_t decode_image(uint16_t ***pixels)
     jd.outData=*pixels;
     jd.outW=IMAGE_W;
     jd.outH=IMAGE_H;
-    
+
+	ESP_LOGD(TAG, "tianxin decodeer start decode");
     //Prepare and decode the jpeg.
     r=jd_prepare(&decoder, infunc, work, WORKSZ, (void*)&jd);
     if (r!=JDR_OK) {
@@ -130,7 +131,9 @@ esp_err_t decode_image(uint16_t ***pixels)
         ret=ESP_ERR_NOT_SUPPORTED;
         goto err;
     }
+	ESP_LOGD(TAG, "tianxin decodeer start decode33333");
     r=jd_decomp(&decoder, outfunc, 0);
+	ESP_LOGD(TAG, "tianxin decodeer start decode444444");
     if (r!=JDR_OK) {
         ESP_LOGE(TAG, "Image decoder: jd_decode failed (%d)", r);
         ret=ESP_ERR_NOT_SUPPORTED;

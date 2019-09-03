@@ -8,6 +8,8 @@
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "decode_image.h"
+#include "esp_log.h"
 
 #define PARALLEL_LINES 16
 
@@ -23,9 +25,6 @@
 
 #define LCD_TYPE_ILI 1
 
-#define RGB565(r, g, b) ((r>>3)<<11)&((g>>2)<<5)&(b>>3)
-
-#define BLUE RGB565(0, 0, 255)
 
 /*
  The LCD needs a bunch of command/argument values to be initialized. They are stored in this struct.
@@ -35,6 +34,9 @@ typedef struct {
     uint8_t data[16];
     uint8_t databytes; //No of data in data; bit 7 = delay after set; 0xFF = end of cmds.
 } lcd_init_cmd_t;
+
+
+uint16_t **pixels;
 
 
 //Place data into DRAM. Constant data gets placed into DROM by default, which is not accessible by DMA.
@@ -65,23 +67,25 @@ DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[]={
     /* Power control 2, DDVDH=VCl*2, VGH=VCl*7, VGL=-VCl*3 */
     {0xC1, {0x11}, 1},
     /* VCOM control 1, VCOMH=4.025V, VCOML=-0.950V */
-    {0xC5, {0x35, 0x3E}, 2},
+    {0xC5, {0x3E, 0x28}, 2},
     /* VCOM control 2, VCOMH=VMH-2, VCOML=VML-2 */
     {0xC7, {0xBE}, 1},
-    /* Memory access contorl, MX=MY=0, MV=1, ML=0, BGR=1, MH=0 */
-    {0x36, {0x68}, 1},
+    /* Memory access contorl, MX=MY=0, MV=1, ML=0, RGB=0, MH=0 */
+    {0x36, {0x60}, 1},
     /* Pixel format, 16bits/pixel for RGB/MCU interface */
     {0x3A, {0x55}, 1},
     /* Frame rate control, f=fosc, 70Hz fps */
     {0xB1, {0x00, 0x1B}, 2},
     /* Enable 3G, disabled */
-    {0xF2, {0x08}, 1},
+    {0xF2, {0x00}, 1},
     /* Gamma set, curve 1 */
     {0x26, {0x01}, 1},
     /* Positive gamma correction */
-    {0xE0, {0x1F, 0x1A, 0x18, 0x0A, 0x0F, 0x06, 0x45, 0X87, 0x32, 0x0A, 0x07, 0x02, 0x07, 0x05, 0x00}, 15},
+    //{0xE0, {0x1F, 0x1A, 0x18, 0x0A, 0x0F, 0x06, 0x45, 0X87, 0x32, 0x0A, 0x07, 0x02, 0x07, 0x05, 0x00}, 15},
+	{0xE0, {0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0XF1, 0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00}, 15},
     /* Negative gamma correction */
-    {0XE1, {0x00, 0x25, 0x27, 0x05, 0x10, 0x09, 0x3A, 0x78, 0x4D, 0x05, 0x18, 0x0D, 0x38, 0x3A, 0x1F}, 15},
+    //{0XE1, {0x00, 0x25, 0x27, 0x05, 0x10, 0x09, 0x3A, 0x78, 0x4D, 0x05, 0x18, 0x0D, 0x38, 0x3A, 0x1F}, 15},
+	{0XE1, {0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F}, 15},
     /* Column address set, SC=0, EC=0xEF */
     {0x2A, {0x00, 0x00, 0x00, 0xEF}, 4},
     /* Page address set, SP=0, EP=0x013F */
@@ -91,7 +95,7 @@ DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[]={
     /* Entry mode set, Low vol detect disabled, normal display */
     {0xB7, {0x07}, 1},
     /* Display function control */
-    {0xB6, {0x0A, 0x82, 0x27, 0x00}, 4},   
+    {0xB6, {0x0A, 0x82, 0x27, 0x00}, 4},
     /* Sleep out */
     {0x11, {0}, 0x80},
     /* Display on */
@@ -101,7 +105,7 @@ DRAM_ATTR static const lcd_init_cmd_t ili_init_cmds[]={
 
 
 spi_device_handle_t lcd_spi;
-
+spi_transaction_t lcd_trans[6];
 
 
 /***************************************************************************
@@ -153,6 +157,31 @@ void lcd_spi_init(){
     ESP_ERROR_CHECK(ret);
 }
 
+
+/***************************************************************************
+ *函数名称：lcd_trans_init
+ *函数功能：初始化spi的传输结构
+ *函数参数：void
+ *函数返回：void
+***************************************************************************/
+void lcd_trans_init(){
+
+    int x;
+
+    for (x=0; x<6; x++) {
+		memset(&lcd_trans[x], 0, sizeof(spi_transaction_t));
+		if ((x&1)==0) {
+		    //Even transfers are commands
+		    lcd_trans[x].length=8;
+		    lcd_trans[x].user=(void*)0;
+		} else {
+		    //Odd transfers are data
+		    lcd_trans[x].length=8*4;
+		    lcd_trans[x].user=(void*)1;
+		}
+		lcd_trans[x].flags=SPI_TRANS_USE_TXDATA;
+    }
+}
 
 /***************************************************************************
  *函数名称：lcd_cmd
@@ -242,6 +271,7 @@ void lcd_init()
     const lcd_init_cmd_t* lcd_init_cmds;
 
 	lcd_spi_init();
+	lcd_trans_init();
 
     //Initialize non-SPI GPIOs
     gpio_set_direction(PIN_NUM_DC, GPIO_MODE_OUTPUT);
@@ -314,8 +344,8 @@ void lcd_send_lines(int ypos, uint16_t *linedata)
     trans[2].tx_data[0]=0x2B;           //Page address set
     trans[3].tx_data[0]=ypos>>8;        //Start page high
     trans[3].tx_data[1]=ypos&0xff;      //start page low
-    trans[3].tx_data[2]=(ypos)>>8;    //end page high
-    trans[3].tx_data[3]=(ypos)&0xff;  //end page low
+    trans[3].tx_data[2]=ypos>>8;    //end page high
+    trans[3].tx_data[3]=ypos&0xff;  //end page low
     trans[4].tx_data[0]=0x2C;           //memory write
     trans[5].tx_buffer=linedata;        //finally send the line data
     trans[5].length=240*2*8;          //Data length, in bits
@@ -352,12 +382,12 @@ void lcd_send_line_finish()
  *函数参数：(1) color: 清屏颜色
  *函数返回：void
 ***************************************************************************/
-void lcd_clear_screen(){
+void lcd_clear_screen(uint16_t color){
 	uint16_t x;
 	uint16_t data[240];
-
+	
     for (x=0; x<240; x++){
-		data[x] = BLUE;
+		data[x] = (color>>8)|(color<<8);
 	}
 
 	for (x=0; x<320; x++){
@@ -365,4 +395,184 @@ void lcd_clear_screen(){
 	}
 
 }
+
+
+
+/***************************************************************************
+ *函数名称：lcd_image_decode_init
+ *函数功能：显示一张图片在lcd上
+ *函数参数：void
+ *函数返回：void
+***************************************************************************/
+void lcd_image_decode_init(){
+
+	printf("decode picture start.\n");
+	decode_image(&pixels);
+	printf("decode picture success.\n");
+}
+
+
+/***************************************************************************
+ *函数名称：lcd_show_picture
+ *函数功能：显示一张图片在lcd上
+ *函数参数：void
+ *函数返回：void
+***************************************************************************/
+void lcd_show_picture(){
+	uint16_t x;
+	uint16_t y;
+	uint16_t *line, *temp;
+
+    line=heap_caps_malloc(240*sizeof(uint16_t), MALLOC_CAP_DMA);
+	temp = line;
+	
+	for(y=0; y<320; y++){
+
+		for (x=0; x<240; x++){
+			temp[x]= pixels[y][x];
+		}
+		lcd_send_lines(y, temp);
+	}
+	printf("lcd show picture success.\n");
+}
+
+/***************************************************************************
+ *函数名称：lcd_draw_point
+ *函数功能：在屏幕上绘制一个点
+ *函数参数：(1) posX: 点坐标x值， (2) posY: 点坐标y值，(3) color: 点颜色
+ *函数返回：void
+***************************************************************************/
+void lcd_draw_point(uint16_t posX, uint16_t posY, uint16_t color){
+
+    esp_err_t ret;
+	uint16_t x;
+
+    lcd_trans[0].tx_data[0]=0x2A;           //Column Address Set
+    lcd_trans[1].tx_data[0]=posX>>8;              //Start Col High
+    lcd_trans[1].tx_data[1]=posX&0xff;              //Start Col Low
+    lcd_trans[1].tx_data[2]=posX>>8;       //End Col High
+    lcd_trans[1].tx_data[3]=posX&0xff;     //End Col Low
+    lcd_trans[2].tx_data[0]=0x2B;           //Page address set
+    lcd_trans[3].tx_data[0]=posY>>8;        //Start page high
+    lcd_trans[3].tx_data[1]=posY&0xff;      //start page low
+    lcd_trans[3].tx_data[2]=posY>>8;    //end page high
+    lcd_trans[3].tx_data[3]=posY&0xff;  //end page low
+    lcd_trans[4].tx_data[0]=0x2C;           //memory write
+    //lcd_trans[5].tx_data[0]=color&0xff;      //color low
+  	//lcd_trans[5].tx_data[1]=color>>8;        //color high
+
+	uint8_t data[2];
+	data[1] = color&0xff;
+	data[0] =color>>8;
+	lcd_trans[5].tx_buffer= data;      
+    lcd_trans[5].length=2*8;          
+    lcd_trans[5].flags=0; 
+
+    for (x=0; x<6; x++) {
+        ret=spi_device_queue_trans(lcd_spi, &lcd_trans[x], portMAX_DELAY);
+        assert(ret==ESP_OK);
+    }
+}
+
+
+/***************************************************************************
+ *函数名称：lcd_draw_circle
+ *函数功能：在屏幕上绘制一个圆圈
+ *函数参数：(1) cx: 圆心坐标x值， (2) cy: 圆心坐标y值，(3) r: 圆半径，(4) color: 圆颜色
+ *函数返回：void
+***************************************************************************/
+void lcd_draw_circle(uint16_t x, uint16_t y, uint16_t r, uint16_t color)
+{
+    uint16_t a, b, num;
+    a = 0;
+    b = r;
+    while(2 * b * b >= r * r)          // 1/8圆即可
+    {
+        lcd_draw_point(x + a, y - b,color); // 0~1
+        lcd_draw_point(x - a, y - b,color); // 0~7
+        lcd_draw_point(x - a, y + b,color); // 4~5
+        lcd_draw_point(x + a, y + b,color); // 4~3
+ 
+        lcd_draw_point(x + b, y + a,color); // 2~3
+        lcd_draw_point(x + b, y - a,color); // 2~1
+        lcd_draw_point(x - b, y - a,color); // 6~7
+        lcd_draw_point(x - b, y + a,color); // 6~5
+        
+        a++;
+        num = (a * a + b * b) - r*r;
+        if(num > 0)
+        {
+            b--;
+            a--;
+        }
+    }
+}
+
+
+/***************************************************************************
+ *函数名称：lcd_draw_text_16
+ *函数功能：在屏幕上绘制一个16*16的汉字,使用的是纵向取模
+ *函数参数：(1) charX: 字符显示x位置， (2) charY: 字符显示y位置，(3) *data: 字符数据buffer，(4) color: 圆颜色
+ *函数返回：void
+***************************************************************************/
+void  lcd_draw_text_16(uint16_t charX,uint16_t charY,uint8_t *data,uint16_t color)
+{
+		uint8_t i,j,temp;
+		uint8_t y ;
+		y=charY;
+		for(i=0;i<32;i++)
+		{
+			temp = data[i];
+				for(j=0;j<8;j++)
+			{
+					if(temp&0x80)
+					lcd_draw_point(charX,y,color);
+
+					temp<<=1;
+					y++;
+					if((y-charY)==16)
+					{
+						y=charY;
+						charX++;
+						break;
+					}
+			}
+		}
+}
+
+/***************************************************************************
+ *函数名称：lcd_draw_text_h16
+ *函数功能：在屏幕上绘制一个16*16的汉字,使用的是横向取模
+ *函数参数：(1) charX: 字符显示x位置， (2) charY: 字符显示y位置，
+			(3) *data: 字符数据buffer，(4) color: 圆颜色
+ *函数返回：void
+***************************************************************************/
+void  lcd_draw_text_h16(uint16_t charX,uint16_t charY,uint8_t *data,uint16_t color)
+{
+		uint8_t i,j,temp;
+		uint8_t x ;
+		x=charX;
+		for(i=0;i<32;i++)
+		{
+			temp = data[i];
+				for(j=0;j<8;j++)
+			{
+					if(temp&0x80)
+					lcd_draw_point(x,charY,color);
+
+					temp<<=1;
+					x++;
+					if((x-charX)==16)
+					{
+						x=charX;
+						charY++;
+						break;
+					}
+			}
+		}
+}
+
+
+
+
 

@@ -20,17 +20,23 @@
 
 #define RGB565(r,g,b)  (((r>>3)<<11)|((g>>2)<<6)|(b>>3)) //RGB565颜色
 
-#define RED										RGB565(255,0,0) //红色
-#define GREEN									RGB565(0,255,0) //绿色
-#define BLUE									RGB565(0,0,255) //蓝色
-#define WHITE									RGB565(255,255,255) //白色
-#define PURPLE									RGB565(120,9,130) //紫色
-#define BLACK									RGB565(0,0,0) //黑色
+#define RED				RGB565(255,0,0) //红色
+#define GREEN			RGB565(0,255,0) //绿色
+#define BLUE			RGB565(0,0,255) //蓝色
+#define WHITE			RGB565(255,255,255) //白色
+#define PURPLE			RGB565(120,9,130) //紫色
+#define BLACK			RGB565(0,0,0) //黑色
+
+#define YELLOW			RGB565(255,255,0)
 
 void lcd_init();
 void lcd_send_lines(int ypos, uint16_t *linedata);
 void lcd_send_line_finish();
-void lcd_clear_screen();
-
-
+void lcd_clear_screen(uint16_t color);
+void lcd_image_decode_init();
+void lcd_show_picture();
+void lcd_draw_point(uint16_t posX, uint16_t posY, uint16_t color);
+void lcd_draw_circle(uint16_t cx,uint16_t cy,uint16_t r,uint16_t color);
+void  lcd_draw_text_16(uint16_t charX,uint16_t charY,uint8_t *data,uint16_t color);
+void  lcd_draw_text_h16(uint16_t charX,uint16_t charY,uint8_t *data,uint16_t color);
 #endif
