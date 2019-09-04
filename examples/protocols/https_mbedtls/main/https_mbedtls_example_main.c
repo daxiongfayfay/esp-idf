@@ -142,7 +142,7 @@ static void https_get_task(void *pvParameters)
     mbedtls_ssl_conf_ca_chain(&conf, &cacert, NULL);
     mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &ctr_drbg);
 #ifdef CONFIG_MBEDTLS_DEBUG
-    mbedtls_esp_enable_debug_log(&conf, 4);
+    mbedtls_esp_enable_debug_log(&conf, CONFIG_MBEDTLS_DEBUG_LEVEL);
 #endif
 
     if ((ret = mbedtls_ssl_setup(&ssl, &conf)) != 0)
@@ -271,7 +271,7 @@ static void https_get_task(void *pvParameters)
     }
 }
 
-void app_main()
+void app_main(void)
 {
     ESP_ERROR_CHECK( nvs_flash_init() );
     tcpip_adapter_init();

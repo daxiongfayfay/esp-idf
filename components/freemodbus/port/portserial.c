@@ -44,7 +44,7 @@
 #include "port.h"
 #include "driver/uart.h"
 #include "freertos/queue.h" // for queue support
-#include "soc/uart_reg.h"
+#include "soc/uart_periph.h"
 #include "driver/gpio.h"
 #include "esp_log.h"        // for esp_log
 #include "esp_err.h"        // for ESP_ERROR_CHECK macro
@@ -61,14 +61,14 @@
 #define MB_UART_RTS   (CONFIG_MB_UART_RTS)
 
 #define MB_BAUD_RATE_DEFAULT        (115200)
-#define MB_QUEUE_LENGTH             (CONFIG_MB_QUEUE_LENGTH)
+#define MB_QUEUE_LENGTH             (CONFIG_FMB_QUEUE_LENGTH)
 
-#define MB_SERIAL_TASK_PRIO         (CONFIG_MB_SERIAL_TASK_PRIO)
-#define MB_SERIAL_TASK_STACK_SIZE   (CONFIG_MB_SERIAL_TASK_STACK_SIZE)
+#define MB_SERIAL_TASK_PRIO         (CONFIG_FMB_SERIAL_TASK_PRIO)
+#define MB_SERIAL_TASK_STACK_SIZE   (CONFIG_FMB_SERIAL_TASK_STACK_SIZE)
 #define MB_SERIAL_TOUT              (3) // 3.5*8 = 28 ticks, TOUT=3 -> ~24..33 ticks
 
 // Set buffer size for transmission
-#define MB_SERIAL_BUF_SIZE          (CONFIG_MB_SERIAL_BUF_SIZE)
+#define MB_SERIAL_BUF_SIZE          (CONFIG_FMB_SERIAL_BUF_SIZE)
 
 // Note: This code uses mixed coding standard from legacy IDF code and used freemodbus stack
 
@@ -78,7 +78,7 @@ static TaskHandle_t  xMbTaskHandle;
 static const CHAR *TAG = "MB_SERIAL";
 
 // The UART hardware port number
-static UCHAR ucUartNumber = UART_NUM_2;
+static UCHAR ucUartNumber = UART_NUM_MAX - 1;
 
 static BOOL bRxStateEnabled = FALSE; // Receiver enabled flag
 static BOOL bTxStateEnabled = FALSE; // Transmitter enabled flag
@@ -130,7 +130,7 @@ static void vMBPortSerialRxPoll(size_t xEventSize)
     }
 }
 
-BOOL xMBPortSerialTxPoll()
+BOOL xMBPortSerialTxPoll(void)
 {
     BOOL bStatus = FALSE;
     USHORT usCount = 0;
@@ -271,7 +271,7 @@ BOOL xMBPortSerialInit(UCHAR ucPORT, ULONG ulBaudRate,
     return TRUE;
 }
 
-void vMBPortSerialClose()
+void vMBPortSerialClose(void)
 {
     (void)vTaskSuspend(xMbTaskHandle);
     (void)vTaskDelete(xMbTaskHandle);

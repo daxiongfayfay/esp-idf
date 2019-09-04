@@ -16,12 +16,10 @@
 #define _DRIVER_I2S_H_
 #include "esp_err.h"
 #include <esp_types.h>
-#include "soc/gpio_reg.h"
 #include "soc/soc.h"
-#include "soc/i2s_struct.h"
-#include "soc/i2s_reg.h"
-#include "soc/rtc_io_reg.h"
-#include "soc/io_mux_reg.h"
+#include "soc/gpio_periph.h"
+#include "soc/i2s_periph.h"
+#include "soc/rtc_periph.h"
 #include "esp32/rom/gpio.h"
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"
@@ -502,6 +500,16 @@ esp_err_t i2s_zero_dma_buffer(i2s_port_t i2s_num);
  *     - ESP_ERR_NO_MEM      Out of memory
  */
 esp_err_t i2s_set_clk(i2s_port_t i2s_num, uint32_t rate, i2s_bits_per_sample_t bits, i2s_channel_t ch);
+
+/**
+ * @brief get clock set on particular port number.
+ *
+ * @param i2s_num  I2S_NUM_0, I2S_NUM_1
+ *
+ * @return
+ *     - actual clock set by i2s driver
+ */
+float i2s_get_clk(i2s_port_t i2s_num);
 
 /**
  * @brief Set built-in ADC mode for I2S DMA, this function will initialize ADC pad,

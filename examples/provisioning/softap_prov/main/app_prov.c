@@ -230,7 +230,7 @@ esp_err_t app_prov_is_provisioned(bool *provisioned)
 {
     *provisioned = false;
 
-#ifdef CONFIG_RESET_PROVISIONED
+#ifdef CONFIG_EXAMPLE_RESET_PROVISIONED
     nvs_flash_erase();
 #endif
 
@@ -288,14 +288,13 @@ static esp_err_t start_wifi_ap(const char *ssid, const char *pass)
         },
     };
 
-    strncpy((char *) wifi_config.ap.ssid, ssid, sizeof(wifi_config.ap.ssid));
-    wifi_config.ap.ssid_len = strlen(ssid);
+    strlcpy((char *) wifi_config.ap.ssid, ssid, sizeof(wifi_config.ap.ssid));
 
     if (strlen(pass) == 0) {
         memset(wifi_config.ap.password, 0, sizeof(wifi_config.ap.password));
         wifi_config.ap.authmode = WIFI_AUTH_OPEN;
     } else {
-        strncpy((char *) wifi_config.ap.password, pass, sizeof(wifi_config.ap.password));
+        strlcpy((char *) wifi_config.ap.password, pass, sizeof(wifi_config.ap.password));
         wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
     }
 

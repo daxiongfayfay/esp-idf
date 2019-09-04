@@ -1,16 +1,18 @@
 Networking APIs
 ***************
 
+:link_to_translation:`zh_CN:[中文]`
+
 Wi-Fi
 =====
 
 .. toctree::
-   :maxdepth: 1
+    :maxdepth: 1
 
-   Wi-Fi <esp_wifi>
-   Smart Config <esp_smartconfig>
-   ESP-NOW <esp_now>
-   ESP Mesh <esp_mesh>
+    Wi-Fi <esp_wifi>
+    Smart Config <esp_smartconfig>
+    ESP-NOW <esp_now>
+    ESP Mesh <esp_mesh>
 
 Code examples for the Wi-Fi API are provided in the :example:`wifi` directory of ESP-IDF examples.
 

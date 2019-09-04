@@ -69,7 +69,7 @@ static esp_err_t mbc_serial_slave_setup(void* comm_info)
     MB_SLAVE_CHECK((comm_settings->slave_addr <= MB_ADDRESS_MAX),
                 ESP_ERR_INVALID_ARG, "mb wrong slave address = (0x%x).",
                 (uint32_t)comm_settings->slave_addr);
-    MB_SLAVE_CHECK((comm_settings->port <= UART_NUM_2), ESP_ERR_INVALID_ARG,
+    MB_SLAVE_CHECK((comm_settings->port < UART_NUM_MAX), ESP_ERR_INVALID_ARG,
                 "mb wrong port to set = (0x%x).", (uint32_t)comm_settings->port);
     MB_SLAVE_CHECK((comm_settings->parity <= UART_PARITY_EVEN), ESP_ERR_INVALID_ARG,
                 "mb wrong parity option = (0x%x).", (uint32_t)comm_settings->parity);
@@ -95,7 +95,7 @@ static esp_err_t mbc_serial_slave_start(void)
                          (eMBParity)mbs_opts->mbs_comm.parity);
     MB_SLAVE_CHECK((status == MB_ENOERR), ESP_ERR_INVALID_STATE,
             "mb stack initialization failure, eMBInit() returns (0x%x).", status);
-#ifdef CONFIG_MB_CONTROLLER_SLAVE_ID_SUPPORT
+#ifdef CONFIG_FMB_CONTROLLER_SLAVE_ID_SUPPORT
     status = eMBSetSlaveID(MB_SLAVE_ID_SHORT, TRUE, (UCHAR*)mb_slave_id, sizeof(mb_slave_id));
     MB_SLAVE_CHECK((status == MB_ENOERR), ESP_ERR_INVALID_STATE, "mb stack set slave ID failure.");
 #endif
@@ -156,7 +156,7 @@ esp_err_t mbc_serial_slave_set_descriptor(const mb_register_area_descriptor_t de
 }
 
 // The helper function to get time stamp in microseconds
-static uint64_t get_time_stamp()
+static uint64_t get_time_stamp(void)
 {
     uint64_t time_stamp = esp_timer_get_time();
     return time_stamp;

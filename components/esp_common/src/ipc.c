@@ -82,9 +82,9 @@ static void IRAM_ATTR ipc_task(void* arg)
  * woken up to execute the callback provided to esp_ipc_call_nonblocking or
  * esp_ipc_call_blocking.
  */
-static void esp_ipc_init() __attribute__((constructor));
+static void esp_ipc_init(void) __attribute__((constructor));
 
-static void esp_ipc_init()
+static void esp_ipc_init(void)
 {
     s_ipc_mutex = xSemaphoreCreateMutex();
     s_ipc_ack = xSemaphoreCreateBinary();
@@ -92,7 +92,7 @@ static void esp_ipc_init()
     for (int i = 0; i < portNUM_PROCESSORS; ++i) {
         snprintf(task_name, sizeof(task_name), "ipc%d", i);
         s_ipc_sem[i] = xSemaphoreCreateBinary();
-        portBASE_TYPE res = xTaskCreatePinnedToCore(ipc_task, task_name, CONFIG_IPC_TASK_STACK_SIZE, (void*) i,
+        portBASE_TYPE res = xTaskCreatePinnedToCore(ipc_task, task_name, CONFIG_ESP_IPC_TASK_STACK_SIZE, (void*) i,
                                                     configMAX_PRIORITIES - 1, NULL, i);
         assert(res == pdTRUE);
     }

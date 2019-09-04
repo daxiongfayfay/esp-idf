@@ -27,9 +27,9 @@
 #include "esp_vfs.h"
 #include "sdkconfig.h"
 
-#ifdef CONFIG_SUPPRESS_SELECT_DEBUG_OUTPUT
+#ifdef CONFIG_VFS_SUPPRESS_SELECT_DEBUG_OUTPUT
 #define LOG_LOCAL_LEVEL ESP_LOG_NONE
-#endif //CONFIG_SUPPRESS_SELECT_DEBUG_OUTPUT
+#endif //CONFIG_VFS_SUPPRESS_SELECT_DEBUG_OUTPUT
 #include "esp_log.h"
 
 static const char *TAG = "vfs";
@@ -447,6 +447,33 @@ ssize_t esp_vfs_read(struct _reent *r, int fd, void * dst, size_t size)
     return ret;
 }
 
+ssize_t esp_vfs_pread(int fd, void *dst, size_t size, off_t offset)
+{
+    struct _reent *r = __getreent();
+    const vfs_entry_t* vfs = get_vfs_for_fd(fd);
+    const int local_fd = get_local_fd(vfs, fd);
+    if (vfs == NULL || local_fd < 0) {
+        __errno_r(r) = EBADF;
+        return -1;
+    }
+    ssize_t ret;
+    CHECK_AND_CALL(ret, r, vfs, pread, local_fd, dst, size, offset);
+    return ret;
+}
+
+ssize_t esp_vfs_pwrite(int fd, const void *src, size_t size, off_t offset)
+{
+    struct _reent *r = __getreent();
+    const vfs_entry_t* vfs = get_vfs_for_fd(fd);
+    const int local_fd = get_local_fd(vfs, fd);
+    if (vfs == NULL || local_fd < 0) {
+        __errno_r(r) = EBADF;
+        return -1;
+    }
+    ssize_t ret;
+    CHECK_AND_CALL(ret, r, vfs, pwrite, local_fd, src, size, offset);
+    return ret;
+}
 
 int esp_vfs_close(struct _reent *r, int fd)
 {
@@ -543,6 +570,34 @@ int esp_vfs_rename(struct _reent *r, const char *src, const char *dst)
     CHECK_AND_CALL(ret, r, vfs, rename, src_within_vfs, dst_within_vfs);
     return ret;
 }
+
+/* Create aliases for newlib syscalls
+
+   These functions are also available in ROM as stubs which use the syscall table, but linking them
+   directly here saves an additional function call when a software function is linked to one, and
+   makes linking with -stdlib easier.
+ */
+int _open_r(struct _reent *r, const char * path, int flags, int mode)
+    __attribute__((alias("esp_vfs_open")));
+ssize_t _write_r(struct _reent *r, int fd, const void * data, size_t size)
+    __attribute__((alias("esp_vfs_write")));
+off_t _lseek_r(struct _reent *r, int fd, off_t size, int mode)
+    __attribute__((alias("esp_vfs_lseek")));
+ssize_t _read_r(struct _reent *r, int fd, void * dst, size_t size)
+    __attribute__((alias("esp_vfs_read")));
+int _close_r(struct _reent *r, int fd)
+    __attribute__((alias("esp_vfs_close")));
+int _fstat_r(struct _reent *r, int fd, struct stat * st)
+    __attribute__((alias("esp_vfs_fstat")));
+int _stat_r(struct _reent *r, const char * path, struct stat * st)
+    __attribute__((alias("esp_vfs_stat")));
+int _link_r(struct _reent *r, const char* n1, const char* n2)
+    __attribute__((alias("esp_vfs_link")));
+int _unlink_r(struct _reent *r, const char *path)
+    __attribute__((alias("esp_vfs_unlink")));
+int _rename_r(struct _reent *r, const char *src, const char *dst)
+    __attribute__((alias("esp_vfs_rename")));
+
 
 DIR* opendir(const char* name)
 {
@@ -739,13 +794,16 @@ int truncate(const char *path, off_t length)
     return ret;
 }
 
-static void call_end_selects(int end_index, const fds_triple_t *vfs_fds_triple)
+static void call_end_selects(int end_index, const fds_triple_t *vfs_fds_triple, void **driver_args)
 {
     for (int i = 0; i < end_index; ++i) {
         const vfs_entry_t *vfs = get_vfs_for_index(i);
         const fds_triple_t *item = &vfs_fds_triple[i];
         if (vfs && vfs->vfs.end_select && item->isset) {
-            vfs->vfs.end_select();
+            esp_err_t err = vfs->vfs.end_select(driver_args[i]);
+            if (err != ESP_OK) {
+                ESP_LOGD(TAG, "end_select failed: %s", esp_err_to_name(err));
+            }
         }
     }
 }
@@ -800,6 +858,8 @@ static void esp_vfs_log_fd_set(const char *fds_name, const fd_set *fds)
 
 int esp_vfs_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds, struct timeval *timeout)
 {
+    // NOTE: Please see the "Synchronous input/output multiplexing" section of the ESP-IDF Programming Guide
+    // (API Reference -> Storage -> Virtual Filesystem) for a general overview of the implementation of VFS select().
     int ret = 0;
     struct _reent* r = __getreent();
 
@@ -892,6 +952,15 @@ int esp_vfs_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds
         }
     }
 
+    void **driver_args = calloc(s_vfs_count, sizeof(void *));
+
+    if (driver_args == NULL) {
+        free(vfs_fds_triple);
+        __errno_r(r) = ENOMEM;
+        ESP_LOGD(TAG, "calloc is unsuccessful for driver args");
+        return -1;
+    }
+
     for (int i = 0; i < s_vfs_count; ++i) {
         const vfs_entry_t *vfs = get_vfs_for_index(i);
         fds_triple_t *item = &vfs_fds_triple[i];
@@ -903,16 +972,18 @@ int esp_vfs_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds
             esp_vfs_log_fd_set("readfds", &item->readfds);
             esp_vfs_log_fd_set("writefds", &item->writefds);
             esp_vfs_log_fd_set("errorfds", &item->errorfds);
-            esp_err_t err = vfs->vfs.start_select(nfds, &item->readfds, &item->writefds, &item->errorfds, sel_sem);
+            esp_err_t err = vfs->vfs.start_select(nfds, &item->readfds, &item->writefds, &item->errorfds, sel_sem,
+                    driver_args + i);
 
             if (err != ESP_OK) {
-                call_end_selects(i, vfs_fds_triple);
+                call_end_selects(i, vfs_fds_triple, driver_args);
                 (void) set_global_fd_sets(vfs_fds_triple, s_vfs_count, readfds, writefds, errorfds);
                 if (sel_sem.is_sem_local && sel_sem.sem) {
                     vSemaphoreDelete(sel_sem.sem);
                     sel_sem.sem = NULL;
                 }
                 free(vfs_fds_triple);
+                free(driver_args);
                 __errno_r(r) = EINTR;
                 ESP_LOGD(TAG, "start_select failed: %s", esp_err_to_name(err));
                 return -1;
@@ -951,7 +1022,7 @@ int esp_vfs_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds
         xSemaphoreTake(sel_sem.sem, ticks_to_wait);
     }
 
-    call_end_selects(s_vfs_count, vfs_fds_triple); // for VFSs for start_select was called before
+    call_end_selects(s_vfs_count, vfs_fds_triple, driver_args); // for VFSs for start_select was called before
     if (ret >= 0) {
         ret += set_global_fd_sets(vfs_fds_triple, s_vfs_count, readfds, writefds, errorfds);
     }
@@ -960,6 +1031,7 @@ int esp_vfs_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds
         sel_sem.sem = NULL;
     }
     free(vfs_fds_triple);
+    free(driver_args);
 
     ESP_LOGD(TAG, "esp_vfs_select returns %d", ret);
     esp_vfs_log_fd_set("readfds", readfds);
@@ -1004,7 +1076,7 @@ void esp_vfs_select_triggered_isr(esp_vfs_select_sem_t sem, BaseType_t *woken)
     }
 }
 
-#ifdef CONFIG_SUPPORT_TERMIOS
+#ifdef CONFIG_VFS_SUPPORT_TERMIOS
 int tcgetattr(int fd, struct termios *p)
 {
     const vfs_entry_t* vfs = get_vfs_for_fd(fd);
@@ -1102,7 +1174,7 @@ int tcsendbreak(int fd, int duration)
     CHECK_AND_CALL(ret, r, vfs, tcsendbreak, local_fd, duration);
     return ret;
 }
-#endif // CONFIG_SUPPORT_TERMIOS
+#endif // CONFIG_VFS_SUPPORT_TERMIOS
 
 int esp_vfs_utime(const char *path, const struct utimbuf *times)
 {
@@ -1192,4 +1264,9 @@ int esp_vfs_poll(struct pollfd *fds, nfds_t nfds, int timeout)
     }
 
     return ret;
+}
+
+void vfs_include_syscalls_impl(void)
+{
+    // Linker hook function, exists to make the linker examine this fine
 }

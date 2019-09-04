@@ -21,7 +21,7 @@
 
 #include "app_prov.h"
 
-#define EXAMPLE_AP_RECONN_ATTEMPTS  CONFIG_AP_RECONN_ATTEMPTS
+#define EXAMPLE_AP_RECONN_ATTEMPTS  CONFIG_EXAMPLE_AP_RECONN_ATTEMPTS
 
 static const char *TAG = "app";
 
@@ -47,7 +47,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-static void wifi_init_sta()
+static void wifi_init_sta(void)
 {
     /* Set our event handling */
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, event_handler, NULL));
@@ -58,30 +58,30 @@ static void wifi_init_sta()
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-static void start_softap_provisioning()
+static void start_softap_provisioning(void)
 {
     /* Security version */
     int security = 0;
     /* Proof of possession */
     const protocomm_security_pop_t *pop = NULL;
 
-#ifdef CONFIG_USE_SEC_1
+#ifdef CONFIG_EXAMPLE_USE_SEC_1
     security = 1;
 #endif
 
     /* Having proof of possession is optional */
-#ifdef CONFIG_USE_POP
+#ifdef CONFIG_EXAMPLE_USE_POP
     const static protocomm_security_pop_t app_pop = {
-        .data = (uint8_t *) CONFIG_POP,
-        .len = (sizeof(CONFIG_POP)-1)
+        .data = (uint8_t *) CONFIG_EXAMPLE_POP,
+        .len = (sizeof(CONFIG_EXAMPLE_POP)-1)
     };
     pop = &app_pop;
 #endif
 
         const char *ssid = NULL;
 
-#ifdef CONFIG_SOFTAP_SSID
-        ssid = CONFIG_SOFTAP_SSID;
+#ifdef CONFIG_EXAMPLE_SSID
+        ssid = CONFIG_EXAMPLE_SSID;
 #else
         uint8_t eth_mac[6];
         esp_wifi_get_mac(WIFI_IF_STA, eth_mac);
@@ -94,10 +94,10 @@ static void start_softap_provisioning()
 #endif
 
     ESP_ERROR_CHECK(app_prov_start_softap_provisioning(
-        ssid, CONFIG_SOFTAP_PASS, security, pop));
+        ssid, CONFIG_EXAMPLE_PASS, security, pop));
 }
 
-void app_main()
+void app_main(void)
 {
     /* Initialize networking stack */
     tcpip_adapter_init();

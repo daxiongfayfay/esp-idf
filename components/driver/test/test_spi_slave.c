@@ -11,7 +11,7 @@
 #include "sdkconfig.h"
 #include "test/test_common_spi.h"
 
-#ifndef CONFIG_SPIRAM_SUPPORT
+#ifndef CONFIG_ESP32_SPIRAM_SUPPORT
 //This test should be removed once the timing test is merged.
 
 
@@ -51,7 +51,7 @@ static void master_init_nodma( spi_device_handle_t* spi)
     TEST_ASSERT(ret==ESP_OK);
 }
 
-static void slave_init()
+static void slave_init(void)
 {
     //Configuration for the SPI bus
     spi_bus_config_t buscfg={
@@ -140,4 +140,4 @@ TEST_CASE("test slave send unaligned","[spi]")
     ESP_LOGI(MASTER_TAG, "test passed.");
 }
 
-#endif // !CONFIG_SPIRAM_SUPPORT
+#endif // !CONFIG_ESP32_SPIRAM_SUPPORT

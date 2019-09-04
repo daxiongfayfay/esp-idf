@@ -8,7 +8,7 @@
 */
 
 #include <esp_wifi.h>
-#include <esp_event_loop.h>
+#include <esp_event.h>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
@@ -211,7 +211,7 @@ static void connect_handler(void* arg, esp_event_base_t event_base,
 }
 
 
-void app_main()
+void app_main(void)
 {
     static httpd_handle_t server = NULL;
 

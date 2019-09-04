@@ -27,12 +27,18 @@
 #include "esp32/rom/cache.h"
 #include "esp32/rom/spi_flash.h"   /* TODO: Remove this */
 
+/* This file implements FLASH ENCRYPTION related APIs to perform
+ * various operations such as programming necessary flash encryption
+ * eFuses, detect whether flash encryption is enabled (by reading eFuse)
+ * and if required encrypt the partitions in flash memory
+ */
+
 static const char *TAG = "flash_encrypt";
 
 /* Static functions for stages of flash encryption */
 static esp_err_t initialise_flash_encryption(void);
-static esp_err_t encrypt_flash_contents(uint32_t flash_crypt_cnt, bool flash_crypt_wr_dis);
-static esp_err_t encrypt_bootloader();
+static esp_err_t encrypt_flash_contents(uint32_t flash_crypt_cnt, bool flash_crypt_wr_dis) __attribute__((unused));
+static esp_err_t encrypt_bootloader(void);
 static esp_err_t encrypt_and_load_partition_table(esp_partition_info_t *partition_table, int *num_partitions);
 static esp_err_t encrypt_partition(int index, const esp_partition_info_t *partition);
 
@@ -54,8 +60,14 @@ esp_err_t esp_flash_encrypt_check_and_update(void)
         return ESP_OK;
     }
     else {
+#ifndef CONFIG_SECURE_FLASH_REQUIRE_ALREADY_ENABLED
         /* Flash is not encrypted, so encrypt it! */
         return encrypt_flash_contents(flash_crypt_cnt, flash_crypt_wr_dis);
+#else
+        ESP_LOGE(TAG, "flash encryption is not enabled, and SECURE_FLASH_REQUIRE_ALREADY_ENABLED "
+                      "is set, refusing to boot.");
+        return ESP_ERR_INVALID_STATE;
+#endif // CONFIG_SECURE_FLASH_REQUIRE_ALREADY_ENABLED
     }
 }
 
@@ -114,19 +126,19 @@ static esp_err_t initialise_flash_encryption(void)
     esp_efuse_burn_new_values();
 
     uint32_t new_wdata6 = 0;
-#ifndef CONFIG_FLASH_ENCRYPTION_UART_BOOTLOADER_ALLOW_ENCRYPT
+#ifndef CONFIG_SECURE_FLASH_UART_BOOTLOADER_ALLOW_ENC
     ESP_LOGI(TAG, "Disable UART bootloader encryption...");
     new_wdata6 |= EFUSE_DISABLE_DL_ENCRYPT;
 #else
     ESP_LOGW(TAG, "Not disabling UART bootloader encryption");
 #endif
-#ifndef CONFIG_FLASH_ENCRYPTION_UART_BOOTLOADER_ALLOW_DECRYPT
+#ifndef CONFIG_SECURE_FLASH_UART_BOOTLOADER_ALLOW_DEC
     ESP_LOGI(TAG, "Disable UART bootloader decryption...");
     new_wdata6 |= EFUSE_DISABLE_DL_DECRYPT;
 #else
     ESP_LOGW(TAG, "Not disabling UART bootloader decryption - SECURITY COMPROMISED");
 #endif
-#ifndef CONFIG_FLASH_ENCRYPTION_UART_BOOTLOADER_ALLOW_CACHE
+#ifndef CONFIG_SECURE_FLASH_UART_BOOTLOADER_ALLOW_CACHE
     ESP_LOGI(TAG, "Disable UART bootloader MMU cache...");
     new_wdata6 |= EFUSE_DISABLE_DL_CACHE;
 #else
@@ -203,7 +215,13 @@ static esp_err_t encrypt_flash_contents(uint32_t flash_crypt_cnt, bool flash_cry
     /* ffs_inv shouldn't be zero, as zero implies flash_crypt_cnt == EFUSE_RD_FLASH_CRYPT_CNT (0x7F) */
     uint32_t new_flash_crypt_cnt = flash_crypt_cnt + (1 << (ffs_inv - 1));
     ESP_LOGD(TAG, "FLASH_CRYPT_CNT 0x%x -> 0x%x", flash_crypt_cnt, new_flash_crypt_cnt);
-    REG_SET_FIELD(EFUSE_BLK0_WDATA0_REG, EFUSE_FLASH_CRYPT_CNT, new_flash_crypt_cnt);
+    uint32_t wdata0_reg = ((new_flash_crypt_cnt & EFUSE_FLASH_CRYPT_CNT) << EFUSE_FLASH_CRYPT_CNT_S);
+#ifdef CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE
+    ESP_LOGI(TAG, "Write protecting FLASH_CRYPT_CNT eFuse");
+    wdata0_reg |= EFUSE_WR_DIS_FLASH_CRYPT_CNT;
+#endif
+
+    REG_WRITE(EFUSE_BLK0_WDATA0_REG, wdata0_reg);
     esp_efuse_burn_new_values();
 
     ESP_LOGI(TAG, "Flash encryption completed");
@@ -211,7 +229,7 @@ static esp_err_t encrypt_flash_contents(uint32_t flash_crypt_cnt, bool flash_cry
     return ESP_OK;
 }
 
-static esp_err_t encrypt_bootloader()
+static esp_err_t encrypt_bootloader(void)
 {
     esp_err_t err;
     uint32_t image_length;
@@ -337,14 +355,4 @@ esp_err_t esp_flash_encrypt_region(uint32_t src_addr, size_t data_length)
  flash_failed:
     ESP_LOGE(TAG, "flash operation failed: 0x%x", err);
     return err;
-}
-
-void esp_flash_write_protect_crypt_cnt()
-{
-    uint32_t efuse_blk0 = REG_READ(EFUSE_BLK0_RDATA0_REG);
-    bool flash_crypt_wr_dis = efuse_blk0 & EFUSE_WR_DIS_FLASH_CRYPT_CNT;
-    if(!flash_crypt_wr_dis) {
-        REG_WRITE(EFUSE_BLK0_WDATA0_REG, EFUSE_WR_DIS_FLASH_CRYPT_CNT);
-        esp_efuse_burn_new_values();
-    }
 }

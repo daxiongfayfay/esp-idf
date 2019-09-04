@@ -1,11 +1,13 @@
 Provisioning API
 ****************
 
-.. toctree::
-   :maxdepth: 1
+:link_to_translation:`zh_CN:[中文]`
 
-   Unified Provisioning <provisioning>
-   Protocol Communication <protocomm>
-   Wi-Fi Provisioning <wifi_provisioning>
+.. toctree::
+    :maxdepth: 1
+
+    Protocol Communication <protocomm>
+    Unified Provisioning <provisioning>
+    Wi-Fi Provisioning <wifi_provisioning>
 
 Code examples for this API section are provided in the :example:`provisioning` directory of ESP-IDF examples.

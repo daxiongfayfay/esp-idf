@@ -24,10 +24,8 @@
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_event.h"
-#include "esp_event_loop.h"
 #include "nvs_flash.h"
-#include "soc/rtc_cntl_reg.h"
-#include "esp32/rom/cache.h"
+#include "soc/rtc_periph.h"
 #include "driver/spi_slave.h"
 #include "esp_log.h"
 #include "esp_spi_flash.h"
@@ -69,7 +67,7 @@ void my_post_trans_cb(spi_slave_transaction_t *trans) {
 }
 
 //Main application
-void app_main()
+void app_main(void)
 {
     int n=0;
     esp_err_t ret;
@@ -109,8 +107,8 @@ void app_main()
     ret=spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, 1);
     assert(ret==ESP_OK);
 
-    char sendbuf[129]="";
-    char recvbuf[129]="";
+    WORD_ALIGNED_ATTR char sendbuf[129]="";
+    WORD_ALIGNED_ATTR char recvbuf[129]="";
     memset(recvbuf, 0, 33);
     spi_slave_transaction_t t;
     memset(&t, 0, sizeof(t));

@@ -20,6 +20,7 @@
 #include "esp_err.h"
 #include "esp_attr.h"
 #include "esp_bit_defs.h"
+#include "esp_idf_version.h"
 
 #include "sdkconfig.h"
 
@@ -37,7 +38,7 @@ typedef enum {
 /** @cond */
 #define TWO_UNIVERSAL_MAC_ADDR 2
 #define FOUR_UNIVERSAL_MAC_ADDR 4
-#define UNIVERSAL_MAC_ADDR_NUM CONFIG_NUMBER_OF_UNIVERSAL_MAC_ADDRESS
+#define UNIVERSAL_MAC_ADDR_NUM CONFIG_ESP32_UNIVERSAL_MAC_ADDRESSES
 /** @endcond */
 
 /**
@@ -310,14 +311,6 @@ esp_err_t esp_derive_local_mac(uint8_t* local_mac, const uint8_t* universal_mac)
  */
 const char* system_get_sdk_version(void)  __attribute__ ((deprecated));
 /** @endcond */
-
-/**
- * Get IDF version
- *
- * @return constant string from IDF_VER
- */
-const char* esp_get_idf_version(void);
-
 
 /**
  * @brief Chip models

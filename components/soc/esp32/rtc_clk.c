@@ -21,11 +21,10 @@
 #include "esp32/rom/uart.h"
 #include "esp32/rom/gpio.h"
 #include "soc/rtc.h"
-#include "soc/rtc_cntl_reg.h"
-#include "soc/rtc_io_reg.h"
-#include "soc/sens_reg.h"
+#include "soc/rtc_periph.h"
+#include "soc/sens_periph.h"
 #include "soc/dport_reg.h"
-#include "soc/efuse_reg.h"
+#include "soc/efuse_periph.h"
 #include "soc/apb_ctrl_reg.h"
 #include "i2c_rtc_clk.h"
 #include "soc_log.h"
@@ -101,9 +100,9 @@
 #define RTC_PLL_FREQ_320M   320
 #define RTC_PLL_FREQ_480M   480
 
-static void rtc_clk_cpu_freq_to_8m();
-static void rtc_clk_bbpll_disable();
-static void rtc_clk_bbpll_enable();
+static void rtc_clk_cpu_freq_to_8m(void);
+static void rtc_clk_bbpll_disable(void);
+static void rtc_clk_bbpll_enable(void);
 static void rtc_clk_cpu_freq_to_pll_mhz(int cpu_freq_mhz);
 static bool rtc_clk_cpu_freq_from_mhz_internal(int mhz, rtc_cpu_freq_t* out_val);
 
@@ -127,7 +126,7 @@ static void rtc_clk_32k_enable_common(int dac, int dres, int dbias)
     REG_SET_FIELD(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_DRES_XTAL_32K, dres);
     REG_SET_FIELD(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_DBIAS_XTAL_32K, dbias);
 
-#ifdef CONFIG_ESP32_RTC_EXTERNAL_CRYSTAL_ADDITIONAL_CURRENT
+#ifdef CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT
     /* TOUCH sensor can provide additional current to external XTAL.
        In some case, X32N and X32P PAD don't have enough drive capability to start XTAL */
     SET_PERI_REG_MASK(RTC_IO_TOUCH_CFG_REG, RTC_IO_TOUCH_XPD_BIAS_M);
@@ -141,7 +140,7 @@ static void rtc_clk_32k_enable_common(int dac, int dres, int dbias)
        So the Touch DAC start to drive some current from VDD to TOUCH8(which is also XTAL-N)
      */
     SET_PERI_REG_MASK(RTC_IO_TOUCH_PAD9_REG, RTC_IO_TOUCH_PAD9_XPD_M);
-#endif // CONFIG_ESP32_RTC_EXTERNAL_CRYSTAL_ADDITIONAL_CURRENT
+#endif // CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT
     /* Power up external xtal */
     SET_PERI_REG_MASK(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_XPD_XTAL_32K_M);
 }
@@ -155,14 +154,14 @@ void rtc_clk_32k_enable(bool enable)
         CLEAR_PERI_REG_MASK(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_XPD_XTAL_32K_M);
         CLEAR_PERI_REG_MASK(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_X32N_MUX_SEL | RTC_IO_X32P_MUX_SEL);
 
-#ifdef CONFIG_ESP32_RTC_EXTERNAL_CRYSTAL_ADDITIONAL_CURRENT
+#ifdef CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT
         /* Power down TOUCH */
         CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD9_REG, RTC_IO_TOUCH_PAD9_XPD_M);
-#endif // CONFIG_ESP32_RTC_EXTERNAL_CRYSTAL_ADDITIONAL_CURRENT
+#endif // CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT
     }
 }
 
-void rtc_clk_32k_enable_external()
+void rtc_clk_32k_enable_external(void)
 {
     rtc_clk_32k_enable_common(XTAL_32K_EXT_DAC_VAL, XTAL_32K_EXT_DRES_VAL, XTAL_32K_EXT_DBIAS_VAL);
 }
@@ -202,7 +201,7 @@ void rtc_clk_32k_bootstrap(uint32_t cycle)
             XTAL_32K_BOOTSTRAP_DRES_VAL, XTAL_32K_BOOTSTRAP_DBIAS_VAL);
 }
 
-bool rtc_clk_32k_enabled()
+bool rtc_clk_32k_enabled(void)
 {
     return GET_PERI_REG_MASK(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_XPD_XTAL_32K) != 0;
 }
@@ -225,12 +224,12 @@ void rtc_clk_8m_enable(bool clk_8m_en, bool d256_en)
     }
 }
 
-bool rtc_clk_8m_enabled()
+bool rtc_clk_8m_enabled(void)
 {
     return GET_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_ENB_CK8M) == 0;
 }
 
-bool rtc_clk_8md256_enabled()
+bool rtc_clk_8md256_enabled(void)
 {
     return GET_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_ENB_CK8M_DIV) == 0;
 }
@@ -285,12 +284,12 @@ void rtc_clk_slow_freq_set(rtc_slow_freq_t slow_freq)
     ets_delay_us(DELAY_SLOW_CLK_SWITCH);
 }
 
-rtc_slow_freq_t rtc_clk_slow_freq_get()
+rtc_slow_freq_t rtc_clk_slow_freq_get(void)
 {
     return REG_GET_FIELD(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_ANA_CLK_RTC_SEL);
 }
 
-uint32_t rtc_clk_slow_freq_get_hz()
+uint32_t rtc_clk_slow_freq_get_hz(void)
 {
     switch(rtc_clk_slow_freq_get()) {
         case RTC_SLOW_FREQ_RTC: return RTC_SLOW_CLK_FREQ_150K;
@@ -306,7 +305,7 @@ void rtc_clk_fast_freq_set(rtc_fast_freq_t fast_freq)
     ets_delay_us(DELAY_FAST_CLK_SWITCH);
 }
 
-rtc_fast_freq_t rtc_clk_fast_freq_get()
+rtc_fast_freq_t rtc_clk_fast_freq_get(void)
 {
     return REG_GET_FIELD(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_FAST_CLK_RTC_SEL);
 }
@@ -436,7 +435,7 @@ void rtc_clk_cpu_freq_to_xtal(int freq, int div)
     }
 }
 
-static void rtc_clk_cpu_freq_to_8m()
+static void rtc_clk_cpu_freq_to_8m(void)
 {
     ets_update_cpu_frequency(8);
     REG_SET_FIELD(RTC_CNTL_REG, RTC_CNTL_DIG_DBIAS_WAK, DIG_DBIAS_XTAL);
@@ -445,7 +444,7 @@ static void rtc_clk_cpu_freq_to_8m()
     rtc_clk_apb_freq_update(RTC_FAST_CLK_FREQ_8M);
 }
 
-static void rtc_clk_bbpll_disable()
+static void rtc_clk_bbpll_disable(void)
 {
     SET_PERI_REG_MASK(RTC_CNTL_OPTIONS0_REG,
             RTC_CNTL_BB_I2C_FORCE_PD | RTC_CNTL_BBPLL_FORCE_PD |
@@ -460,7 +459,7 @@ static void rtc_clk_bbpll_disable()
     }
 }
 
-static void rtc_clk_bbpll_enable()
+static void rtc_clk_bbpll_enable(void)
 {
     CLEAR_PERI_REG_MASK(RTC_CNTL_OPTIONS0_REG,
              RTC_CNTL_BIAS_I2C_FORCE_PD | RTC_CNTL_BB_I2C_FORCE_PD |
@@ -517,7 +516,7 @@ void rtc_clk_cpu_freq_set_fast(rtc_cpu_freq_t cpu_freq)
     rtc_clk_cpu_freq_set_config_fast(&config);
 }
 
-void rtc_clk_cpu_freq_set_xtal()
+void rtc_clk_cpu_freq_set_xtal(void)
 {
     int freq_mhz = (int) rtc_clk_xtal_freq_get();
 
@@ -526,7 +525,7 @@ void rtc_clk_cpu_freq_set_xtal()
     rtc_clk_bbpll_disable();
 }
 
-rtc_cpu_freq_t rtc_clk_cpu_freq_get()
+rtc_cpu_freq_t rtc_clk_cpu_freq_get(void)
 {
     rtc_cpu_freq_config_t config;
     rtc_clk_cpu_freq_get_config(&config);
@@ -767,7 +766,7 @@ void rtc_clk_cpu_freq_set_config_fast(const rtc_cpu_freq_config_t* config)
     }
 }
 
-rtc_xtal_freq_t rtc_clk_xtal_freq_get()
+rtc_xtal_freq_t rtc_clk_xtal_freq_get(void)
 {
     /* We may have already written XTAL value into RTC_XTAL_FREQ_REG */
     uint32_t xtal_freq_reg = READ_PERI_REG(RTC_XTAL_FREQ_REG);
@@ -791,7 +790,7 @@ void rtc_clk_apb_freq_update(uint32_t apb_freq)
     WRITE_PERI_REG(RTC_APB_FREQ_REG, clk_val_to_reg_val(apb_freq >> 12));
 }
 
-uint32_t rtc_clk_apb_freq_get()
+uint32_t rtc_clk_apb_freq_get(void)
 {
     uint32_t freq_hz = reg_val_to_clk_val(READ_PERI_REG(RTC_APB_FREQ_REG)) << 12;
     // round to the nearest MHz
@@ -803,4 +802,4 @@ uint32_t rtc_clk_apb_freq_get()
 /* Name used in libphy.a:phy_chip_v7.o
  * TODO: update the library to use rtc_clk_xtal_freq_get
  */
-rtc_xtal_freq_t rtc_get_xtal() __attribute__((alias("rtc_clk_xtal_freq_get")));
+rtc_xtal_freq_t rtc_get_xtal(void) __attribute__((alias("rtc_clk_xtal_freq_get")));

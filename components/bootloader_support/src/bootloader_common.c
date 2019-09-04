@@ -17,16 +17,14 @@
 #include "sdkconfig.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "esp32/rom/spi_flash.h"
 #include "esp32/rom/crc.h"
-#include "esp32/rom/ets_sys.h"
 #include "esp32/rom/gpio.h"
 #include "esp_secure_boot.h"
 #include "esp_flash_partitions.h"
 #include "bootloader_flash.h"
 #include "bootloader_common.h"
 #include "soc/gpio_periph.h"
-#include "soc/efuse_reg.h"
+#include "soc/rtc.h"
 #include "esp_image_format.h"
 #include "bootloader_sha.h"
 #include "sys/param.h"
@@ -257,3 +255,81 @@ esp_err_t bootloader_common_get_partition_description(const esp_partition_pos_t 
 
     return ESP_OK;
 }
+
+void bootloader_common_vddsdio_configure(void)
+{
+#if CONFIG_BOOTLOADER_VDDSDIO_BOOST_1_9V
+    rtc_vddsdio_config_t cfg = rtc_vddsdio_get_config();
+    if (cfg.enable == 1 && cfg.tieh == RTC_VDDSDIO_TIEH_1_8V) {    // VDDSDIO regulator is enabled @ 1.8V
+        cfg.drefh = 3;
+        cfg.drefm = 3;
+        cfg.drefl = 3;
+        cfg.force = 1;
+        rtc_vddsdio_set_config(cfg);
+        ets_delay_us(10); // wait for regulator to become stable
+    }
+#endif // CONFIG_BOOTLOADER_VDDSDIO_BOOST
+}
+
+
+#if defined( CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP ) || defined( CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC )
+
+rtc_retain_mem_t *const rtc_retain_mem = (rtc_retain_mem_t *)(SOC_RTC_DRAM_HIGH - sizeof(rtc_retain_mem_t));
+
+static bool check_rtc_retain_mem(void)
+{
+    return crc32_le(UINT32_MAX, (uint8_t*)rtc_retain_mem, sizeof(rtc_retain_mem_t) - sizeof(rtc_retain_mem->crc)) == rtc_retain_mem->crc && rtc_retain_mem->crc != UINT32_MAX;
+}
+
+static void update_rtc_retain_mem_crc(void)
+{
+    rtc_retain_mem->crc = crc32_le(UINT32_MAX, (uint8_t*)rtc_retain_mem, sizeof(rtc_retain_mem_t) - sizeof(rtc_retain_mem->crc));
+}
+
+void bootloader_common_reset_rtc_retain_mem(void)
+{
+    memset(rtc_retain_mem, 0, sizeof(rtc_retain_mem_t));
+}
+
+uint16_t bootloader_common_get_rtc_retain_mem_reboot_counter(void)
+{
+    if (check_rtc_retain_mem()) {
+        return rtc_retain_mem->reboot_counter;
+    }
+    return 0;
+}
+
+esp_partition_pos_t* bootloader_common_get_rtc_retain_mem_partition(void)
+{
+    if (check_rtc_retain_mem()) {
+        return &rtc_retain_mem->partition;
+    }
+    return NULL;
+}
+
+void bootloader_common_update_rtc_retain_mem(esp_partition_pos_t* partition, bool reboot_counter)
+{
+    if (reboot_counter) {
+        if (!check_rtc_retain_mem()) {
+            bootloader_common_reset_rtc_retain_mem();
+        }
+        if (++rtc_retain_mem->reboot_counter == 0) {
+            // do not allow to overflow. Stop it.
+            --rtc_retain_mem->reboot_counter;
+        }
+
+    }
+
+    if (partition != NULL) {
+        rtc_retain_mem->partition.offset = partition->offset;
+        rtc_retain_mem->partition.size   = partition->size;
+    }
+
+    update_rtc_retain_mem_crc();
+}
+
+rtc_retain_mem_t* bootloader_common_get_rtc_retain_mem(void)
+{
+    return rtc_retain_mem;
+}
+#endif
